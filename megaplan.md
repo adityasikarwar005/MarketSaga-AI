@@ -144,7 +144,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 
 | ID | Module | Layer | Phase | Depends on | AI/ML | Status |
 |----|--------|-------|-------|-----------|:-----:|:------:|
-| **M00** | Repo skeleton & Docker stack | L0 | P0 | — | | ◐ |
+| **M00** | Repo skeleton & Docker stack | L0 | P0 | — | | ☑ |
 | **M01** | Config registry (YAML + hashing) | L0 | P0 | M00 | | ☑ |
 | **M02** | Clock & session calendar | L0 | P0 | M00 | | ☑ |
 | **M03** | Schemas & contracts | L0 | P0 | M00 | | ☑ |
@@ -206,7 +206,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M74** | Cost model (PIT rates, STT bases, slippage) | L7 | P7 | M01 | | ☑ |
 | **M75** | Position sizing (fractional Kelly on a lower bound) | L7 | P7 | M59, M74 | | ☑ |
 | **M76** | Risk gate & kill switches ⭐ | L7 | P7 | M75 | | ☑ |
-| **M77** | Recommendation assembler | L7 | P7 | M76 | | ☐ |
+| **M77** | Recommendation assembler | L7 | P7 | M76 | | ☑ |
 | **M80** | Paper broker adapter | L8 | P7 | M77 | | ☐ |
 | **M81** | Fill & slippage model | L8 | P7 | M80 | ⚙ | ☐ |
 | **M82** | L2 event-driven simulator | L8 | P7 | M18, M81 | | ☐ |
@@ -1636,18 +1636,66 @@ Update this table at the end of every sprint. It is the honest picture.
 
 | Layer | Modules | ☑ Verified | ◐ In progress | ☐ Not started |
 |---|---:|---:|---:|---:|
-| L0 Foundation | 7 | 6 | 1 | 0 |
+| L0 Foundation | 7 | 7 | 0 | 0 |
 | L1 Market Data | 11 | 10 | 1 | 0 |
 | L2 News & Events | 10 | 0 | 0 | 10 |
 | L3 Impact | 6 | 5 | 0 | 1 |
 | L4 Features | 6 | 4 | 1 | 1 |
-| L5 Models | 11 | 3 | 0 | 8 |
+| L5 Models | 12 | 8 | 0 | 4 |
 | L6 Projection | 3 | 0 | 0 | 3 |
-| L7 Decision | 8 | 0 | 1 | 7 |
+| L7 Decision | 8 | 4 | 1 | 3 |
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **81** | **36** | **4** | **41** |
+| **Total** | **81** | **38** | **3** | **40** |
+
+### What the module count does not say
+
+**38 of 81 is 47%, and read alone it is misleading in both directions.**
+
+*It understates the foundation.* L0 and L1 are effectively finished, and they are
+the layers everything else stands on: point-in-time correctness, deterministic
+replay, a leak-free CV harness, quality gates. L5 at 8/12 includes the whole
+measurement apparatus - calibration, conformal intervals, the trial log, null
+tests for every fitted component.
+
+*It overstates the distance travelled.* Four layers have not started at all -
+News & Events (0/10), Projection (0/3), Execution (0/6), Surface (0/6) - and two
+of those are real work rather than plumbing. The remaining 44 modules are not
+evenly sized and are not evenly hard.
+
+*And it says nothing about the only question that matters.* **One component has
+run on real market data**: the overnight gap forecaster, on 496 sessions of free
+daily bars. It did not pass its gate. Everything else - direction, volatility,
+ensemble, meta-labeller, sizing, the risk gate - has run only on synthetic data
+where the answer was known in advance.
+
+That is not a criticism of those modules. It is the honest statement of what has
+been *demonstrated* versus what has been *built*, and the two are far apart.
+
+**What exists is the scale, not the goods.** The scale now works: two full audits
+have found nine defects, every one of which produced a working pipeline,
+plausible numbers and no error - a 30% false-positive rate that looked like a
+finding, a gamma of 0.5 invented from noise, an inert regularisation constant
+that read as a defence, a theta sign error hiding under eighty-two passing tests,
+a sizing defence that no code path could reach.
+
+Real progress resumes when a broker feed arrives. Until then every new module is
+another thing waiting on the same input.
+
+### Infrastructure status
+
+| | |
+|---|---|
+| Docker stack | up - TimescaleDB 2.29.2 on **5433**, Redis 7 on 6379, both healthy |
+| Migrations | applied; hypertables live |
+| Test suite | 814 passing, **zero skipped** (the infra tests ran for the first time) |
+| Broker feed | **not connected** - the one remaining external dependency |
+
+Postgres is published on 5433 rather than 5432 because a stock Windows
+PostgreSQL service owns 5432 and starts at boot; connecting there reports a
+password failure against a database that exists, which reads like a wrong
+credential and is a wrong server. See `docs/editor-setup.md`.
 
 ### Gate ledger
 | Gate | Blocks | Status |
