@@ -1,0 +1,88 @@
+# M10 - Instrument master
+#
+# WARNING: every entry below is `verified: false`.
+# Lot sizes and tick sizes change by exchange circular, and using the wrong lot
+# size silently multiplies your position. Before ANY sizing decision:
+#   1. Pull the current contract specification from the exchange / your broker API
+#   2. Add every historical lot-size change as its own `effective_from` entry
+#   3. Cite the circular in `source`
+#   4. Flip `verified: true`
+#
+# libs/ms_core/config.py warns on load while these are false, and the risk gate
+# (M76) will refuse to size an unverified instrument.
+
+instruments:
+  - id: 1
+    symbol: NIFTY
+    name: Nifty 50 Index
+    kind: index
+    exchange: NSE
+    segment: CASH
+    tick_size: 0.05
+    expiry_weekday: 3          # TODO: verify - weekly expiry day has changed more than once
+    verified: false
+    notes: "Spot index. Not directly tradable; underlying for FUT/OPT."
+    lot_sizes: []              # index spot has no lot size
+
+  - id: 2
+    symbol: BANKNIFTY
+    name: Nifty Bank Index
+    kind: index
+    exchange: NSE
+    segment: CASH
+    tick_size: 0.05
+    expiry_weekday: 3          # TODO: verify
+    verified: false
+    notes: "Spot index."
+    lot_sizes: []
+
+  - id: 3
+    symbol: FINNIFTY
+    name: Nifty Financial Services Index
+    kind: index
+    exchange: NSE
+    segment: CASH
+    tick_size: 0.05
+    expiry_weekday: 1          # TODO: verify
+    verified: false
+    notes: "Spot index. Out of scope for v1 trading, in scope for data capture."
+    lot_sizes: []
+
+  - id: 11
+    symbol: NIFTY-FUT
+    name: Nifty 50 Futures (near month)
+    kind: index_future
+    exchange: NSE
+    segment: FUT
+    tick_size: 0.05
+    verified: false
+    notes: "Continuous near-month series. Basis vs spot is a feature (Group B)."
+    lot_sizes:
+      - effective_from: 2020-01-01
+        lot_size: 75
+        source: "TODO: verify against NSE contract specification circular"
+
+  - id: 12
+    symbol: BANKNIFTY-FUT
+    name: Nifty Bank Futures (near month)
+    kind: index_future
+    exchange: NSE
+    segment: FUT
+    tick_size: 0.05
+    verified: false
+    notes: "Continuous near-month series."
+    lot_sizes:
+      - effective_from: 2020-01-01
+        lot_size: 15
+        source: "TODO: verify against NSE contract specification circular"
+
+  - id: 21
+    symbol: INDIAVIX
+    name: India VIX
+    kind: index
+    exchange: NSE
+    segment: CASH
+    tick_size: 0.01
+    verified: false
+    notes: "Regime variable and volatility term-structure anchor. Capture from day 1."
+    lot_sizes: []

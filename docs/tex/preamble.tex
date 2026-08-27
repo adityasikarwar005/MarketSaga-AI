@@ -1,0 +1,108 @@
+% =====================================================================
+%  MarketSage AI  --  Master Engineering & Strategy Blueprint
+%  Author: Aditya Sikarwar
+%  Compile:  pdflatex marketsage_master_plan.tex   (run twice for TOC)
+% =====================================================================
+\documentclass[11pt,a4paper]{report}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=2.2cm,top=2.4cm,bottom=2.4cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tikz}
+\usepackage{listings}
+\usepackage{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,calc,fit,backgrounds}
+\tcbuselibrary{skins,breakable}
+
+% ---------------------------------------------------------------- colours
+\definecolor{msblue}{HTML}{0B3D91}
+\definecolor{mscyan}{HTML}{0E7C86}
+\definecolor{msamber}{HTML}{B26A00}
+\definecolor{msred}{HTML}{9B1C1C}
+\definecolor{msgreen}{HTML}{1B5E20}
+\definecolor{msgrey}{HTML}{4A4A4A}
+\definecolor{mslight}{HTML}{EEF3FA}
+\definecolor{msline}{HTML}{C8D4E4}
+
+% ---------------------------------------------------------------- headers
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\footnotesize\textsc{MarketSage AI}}
+\fancyhead[R]{\footnotesize\leftmark}
+\fancyfoot[C]{\footnotesize\thepage}
+
+\titleformat{\chapter}[display]
+  {\normalfont\Huge\bfseries\color{msblue}}
+  {\normalsize\color{msgrey}\MakeUppercase{\chaptertitlename}\ \thechapter}{6pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{-18pt}{22pt}
+\titleformat{\section}{\normalfont\Large\bfseries\color{msblue}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries\color{mscyan}}{\thesubsection}{0.6em}{}
+
+% ---------------------------------------------------------------- boxes
+\newtcolorbox{keybox}[1][]{
+  enhanced,breakable,colback=mslight,colframe=msblue,
+  boxrule=0.7pt,left=7pt,right=7pt,top=8pt,bottom=6pt,
+  fonttitle=\bfseries\color{white},coltitle=white,
+  colbacktitle=msblue,attach boxed title to top left={xshift=8pt,yshift=-8pt},
+  boxed title style={boxrule=0pt,arc=1pt},#1}
+
+\newtcolorbox{warnbox}[1][]{
+  enhanced,breakable,colback=red!3,colframe=msred,
+  boxrule=0.7pt,left=7pt,right=7pt,top=8pt,bottom=6pt,
+  fonttitle=\bfseries\color{white},coltitle=white,
+  colbacktitle=msred,attach boxed title to top left={xshift=8pt,yshift=-8pt},
+  boxed title style={boxrule=0pt,arc=1pt},#1}
+
+\newtcolorbox{gatebox}[1][]{
+  enhanced,breakable,colback=green!3,colframe=msgreen,
+  boxrule=0.7pt,left=7pt,right=7pt,top=8pt,bottom=6pt,
+  fonttitle=\bfseries\color{white},coltitle=white,
+  colbacktitle=msgreen,attach boxed title to top left={xshift=8pt,yshift=-8pt},
+  boxed title style={boxrule=0pt,arc=1pt},#1}
+
+% ---------------------------------------------------------------- listings
+\lstdefinestyle{ms}{
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{msblue}\bfseries,
+  commentstyle=\color{msgrey}\itshape,
+  stringstyle=\color{mscyan},
+  numbers=left,numberstyle=\tiny\color{msgrey},
+  frame=single,rulecolor=\color{msline},
+  breaklines=true,showstringspaces=false,
+  backgroundcolor=\color{mslight},
+  columns=fullflexible
+}
+\lstset{style=ms}
+
+% ---------------------------------------------------------------- tikz styles
+\tikzset{
+  blk/.style={rectangle,rounded corners=3pt,draw=msblue,fill=mslight,
+              text width=2.6cm,align=center,inner sep=5pt,font=\scriptsize},
+  wide/.style={rectangle,rounded corners=3pt,draw=msblue,fill=mslight,
+              text width=3.25cm,align=center,inner sep=5pt,font=\scriptsize},
+  lay/.style={rectangle,rounded corners=4pt,draw=msblue!60,fill=white,
+              inner sep=8pt},
+  ar/.style={-{Stealth[length=2.5mm]},draw=msblue,thick},
+  arg/.style={-{Stealth[length=2.5mm]},draw=mscyan,thick,dashed}
+}
+
+\newcommand{\term}[1]{\textbf{\color{mscyan}#1}}
+\newcommand{\rs}{\textrm{Rs.}}
+\setlist[itemize]{leftmargin=1.2em,itemsep=1.5pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=1.4em,itemsep=1.5pt,topsep=3pt}
+
+% =====================================================================

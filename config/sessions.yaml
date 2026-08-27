@@ -1,0 +1,46 @@
+# M02 - Session and holiday calendar
+#
+# `holidays` here is for MANUAL PINS ONLY, and is normally empty.
+#
+# The calendar is DISCOVERED, not typed. Run:
+#
+#     python tasks.py holidays
+#
+# which fetches the exchange's published holiday master (with reasons),
+# cross-checks it against days we actually recorded data on, and writes the
+# reconciled result with provenance to data/reference/holidays/YYYY.json.
+#
+# Pin a date here only when you have read an exchange circular and need to
+# override the discovered list - manual entries take precedence and are merged
+# on top of whatever was discovered.
+#
+# libs/ms_core/clock.py still REFUSES to answer `is_trading_day` for a year it
+# has no calendar for, rather than assuming the market was open. A guessed
+# holiday produces 375 phantom missing candles that look exactly like a feed
+# outage.
+
+timezone: Asia/Kolkata
+
+preopen:
+  start: "09:00"
+  end: "09:15"
+
+continuous:
+  start: "09:15"
+  end: "15:30"
+
+# 09:15 -> 15:30 inclusive of the opening minute, exclusive of the closing instant
+expected_continuous_minutes: 375
+
+holidays: {}
+  # 2026:
+  #   - 2026-01-26
+  #   - ...
+
+# Muhurat and other one-off sessions have different price formation.
+# Tag them so they never contaminate continuous-session statistics.
+special_sessions: []
+  # - date: 2026-11-08
+  #   name: muhurat
+  #   start: "18:15"
+  #   end: "19:15"

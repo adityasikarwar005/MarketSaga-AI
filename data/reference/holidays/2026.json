@@ -1,0 +1,186 @@
+{
+  "fetched_at": "2026-08-26T20:07:37.805557+00:00",
+  "holidays": [
+    {
+      "confidence": "single",
+      "day": "2026-01-15",
+      "note": "",
+      "reason": "Municipal Corporation Election - Maharashtra",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-01-26",
+      "note": "",
+      "reason": "Republic Day",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-02-15",
+      "note": "",
+      "reason": "Mahashivratri",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-03-03",
+      "note": "",
+      "reason": "Holi",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-03-21",
+      "note": "",
+      "reason": "Id-Ul-Fitr (Ramadan Eid)",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-03-26",
+      "note": "",
+      "reason": "Shri Ram Navami",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-03-31",
+      "note": "",
+      "reason": "Shri Mahavir Jayanti",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-04-03",
+      "note": "",
+      "reason": "Good Friday",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-04-14",
+      "note": "",
+      "reason": "Dr. Baba Saheb Ambedkar Jayanti",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-05-01",
+      "note": "",
+      "reason": "Maharashtra Day",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-05-28",
+      "note": "",
+      "reason": "Bakri Id",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-06-26",
+      "note": "",
+      "reason": "Muharram",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-08-15",
+      "note": "",
+      "reason": "Independence Day",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-09-14",
+      "note": "",
+      "reason": "Ganesh Chaturthi",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-10-02",
+      "note": "",
+      "reason": "Mahatma Gandhi Jayanti",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-10-20",
+      "note": "",
+      "reason": "Dussehra",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-11-08",
+      "note": "",
+      "reason": "Diwali Laxmi Pujan*",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-11-10",
+      "note": "",
+      "reason": "Diwali-Balipratipada",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-11-24",
+      "note": "",
+      "reason": "Prakash Gurpurb Sri Guru Nanak Dev",
+      "sources": [
+        "nse"
+      ]
+    },
+    {
+      "confidence": "single",
+      "day": "2026-12-25",
+      "note": "",
+      "reason": "Christmas",
+      "sources": [
+        "nse"
+      ]
+    }
+  ],
+  "year": 2026
+}

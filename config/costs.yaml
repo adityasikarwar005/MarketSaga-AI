@@ -1,0 +1,26 @@
+# M74 - Cost model, point-in-time
+#
+# WARNING: every `source` below says TODO. These numbers are PLACEHOLDERS with
+# plausible magnitudes so the pipeline runs end to end. They are NOT correct
+# statutory rates and must not be used for any profitability claim.
+#
+# Before Gate G7 (the backtest gate), replace each field with the real rate:
+#   - brokerage        -> your broker's published charge sheet
+#   - exchange txn fee -> exchange circular (options are charged on PREMIUM turnover)
+#   - STT              -> current Finance Act rate, sell side of options premium
+#   - SEBI fee, stamp duty, GST -> respective circulars
+# Add a NEW dated entry for every change. Never edit an old entry: a backtest
+# must price a 2024 trade with 2024 rates.
+#
+# Reminder that costs real money: never let an in-the-money option expire.
+# Squaring off is almost always cheaper than the exercise charge.
+
+schedules:
+  - effective_from: 2020-01-01
+    brokerage_per_order: 20.0            # flat per executed order
+    exchange_txn_pct_of_premium: 0.00053 # fraction, not percent
+    stt_pct_sell_premium: 0.000625
+    sebi_fee_pct_of_turnover: 0.000001
+    stamp_duty_pct_buy: 0.00003
+    gst_pct_on_charges: 0.18
+    source: "TODO: PLACEHOLDER - verify against broker charge sheet and exchange circulars"

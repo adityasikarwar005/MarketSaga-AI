@@ -1,0 +1,68 @@
+# M20 - Source registry
+#
+# `credibility` is a weight used by the impact scorer (M34), not a binary trust
+# decision. `may_trigger_directional` is the hard rule: a source below 0.5
+# credibility may raise an alert but may NEVER on its own open a directional
+# position. The config loader enforces this - it will refuse to load a file that
+# breaks it.
+#
+# `tos_note` is required on every source. Before enabling one, read its terms:
+# some permit storing only identifiers and derived features, not raw text.
+#
+# Start with FIVE high-value sources, not fifty. Breadth is a Phase 2 problem;
+# timestamp accuracy is a day-one problem.
+
+sources:
+  - id: 1
+    name: "Central bank official releases"
+    source_class: primary_official
+    credibility: 1.00
+    typical_lag_seconds: 1
+    may_trigger_directional: true
+    tos_note: "TODO: confirm scraping policy and rate limits on the official site"
+    enabled: false
+
+  - id: 2
+    name: "Exchange notices"
+    source_class: primary_official
+    credibility: 1.00
+    typical_lag_seconds: 3
+    may_trigger_directional: true
+    tos_note: "TODO: confirm redistribution terms; halts and bans are public notices"
+    enabled: false
+
+  - id: 3
+    name: "International wire service"
+    source_class: wire
+    credibility: 0.90
+    typical_lag_seconds: 5
+    may_trigger_directional: true
+    tos_note: "TODO: paid tier terms - check storage and redistribution limits"
+    enabled: false
+
+  - id: 4
+    name: "National business media RSS"
+    source_class: national_media
+    credibility: 0.75
+    typical_lag_seconds: 90
+    may_trigger_directional: true
+    tos_note: "TODO: RSS is generally permitted for personal use; confirm archival"
+    enabled: false
+
+  - id: 5
+    name: "Economic calendar provider"
+    source_class: calendar
+    credibility: 0.95
+    typical_lag_seconds: 2
+    may_trigger_directional: true
+    tos_note: "TODO: consensus figures are usually licensed - confirm before storing"
+    enabled: false
+
+  - id: 90
+    name: "Anonymous social accounts"
+    source_class: social_unverified
+    credibility: 0.25
+    typical_lag_seconds: 1
+    may_trigger_directional: false   # early warning only - see the AP-hack test
+    tos_note: "TODO: API terms typically forbid bulk storage of post content"
+    enabled: false

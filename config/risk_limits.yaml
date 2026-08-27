@@ -1,0 +1,31 @@
+# M76 - Risk gate limits
+#
+# These are deliberately conservative starting values. Changing ANY of them
+# requires an ADR file in docs/decisions/ explaining why - the CI check
+# `test_risk_limit_changes_have_adr` enforces this.
+#
+# The risk gate sits between the brain and the money. Nothing bypasses it.
+# It is the only module allowed to veto, and it should veto often.
+
+per_trade_capital_at_risk_pct: 1.5
+daily_loss_limit_pct: 3.0          # breach -> stop for the day, flatten, no overrides
+weekly_loss_limit_pct: 6.0         # breach -> stop for the week, mandatory review
+
+max_concurrent_positions: 2
+max_trades_per_day: 6              # prevents overtrading on a noisy news day
+max_trades_per_event: 1            # prevents pyramiding on one hypothesis
+
+max_portfolio_delta: 0.60
+max_portfolio_vega: 5.0
+
+slippage_guard_pct_of_premium: 0.5 # cancel if the fill deviates by more than this
+
+no_entry_first_minutes: 5          # opening auction noise
+no_entry_last_minutes: 10
+forced_flatten_time: "15:20"       # every intraday position squared off, no exceptions
+
+expiry_day_size_multiplier: 0.5    # gamma risk is extreme on expiry day
+kelly_fraction: 0.25               # fractional Kelly; full Kelly is ruinous on estimated p
+
+feed_staleness_halt_seconds: 3.0   # feed silent this long -> halt everything
+clock_drift_halt_ms: 50.0          # time integrity is non-negotiable for point-in-time

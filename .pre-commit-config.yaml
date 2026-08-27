@@ -1,0 +1,58 @@
+# M00 - pre-commit hooks.
+#
+# The secret scanner is the one that matters. A broker API key committed once is
+# a key that must be rotated, and if it reaches a public remote it is a key that
+# is already being used by someone else.
+#
+#   pip install pre-commit && pre-commit install
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=2000"]   # market data belongs in data/, never in git
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: ["--branch", "main"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.7
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/psf/black
+    rev: 24.8.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: "\\.lock$|docs/pdf/"
+
+  - repo: local
+    hooks:
+      # Rule R6: library code must never read the wall clock directly, or the
+      # simulator and production stop sharing a code path.
+      - id: no-wall-clock
+        name: no wall-clock access outside clock.py
+        entry: python -c "import sys,re,pathlib; bad=[f'{p}:{i}' for p in map(pathlib.Path,sys.argv[1:]) if p.name!='clock.py' for i,l in enumerate(p.read_text(encoding='utf-8').splitlines(),1) if re.search(r'datetime\\.now\\(|time\\.time\\(',l) and not l.strip().startswith('#')]; sys.exit('wall-clock access - inject a Clock instead:\\n  '+'\\n  '.join(bad)) if bad else None"
+        language: system
+        files: "^(libs|services)/.*\\.py$"
+
+      # Rule R7: nothing may place a real order without an explicit live flag.
+      - id: risk-limits-need-adr
+        name: risk limit changes require an ADR
+        entry: python -c "import sys,pathlib; adrs=list(pathlib.Path('docs/decisions').glob('ADR-*.md')); sys.exit('config/risk_limits.yaml changed - add an ADR in docs/decisions/ explaining why') if not adrs else None"
+        language: system
+        files: "^config/risk_limits\\.yaml$"

@@ -1,0 +1,352 @@
+% =====================================================================
+\chapter{Repository Structure and Engineering Conventions}
+\label{ch:repo}
+% =====================================================================
+
+\begin{lstlisting}[caption={Monorepo layout}]
+marketsage/
+  docs/
+    marketsage_master_plan.tex     # this document
+    gates.md                       # SIGNED phase-gate records with numbers
+    decisions/ADR-0001-broker.md   # architecture decision records
+    compliance_memo.md
+  config/
+    instruments.yaml  costs.yaml   # dated, point-in-time cost tables
+    risk_limits.yaml               # changes require an ADR
+    sources.yaml                   # source registry + credibility weights
+    taxonomy.yaml                  # versioned event taxonomy
+  libs/
+    ms_core/       # schemas, clock, bus client, tracing, config loader
+    ms_data/       # tick handler, candle builder, chain snapshotter, QC
+    ms_news/       # collectors, normaliser, dedup, publish-time resolver
+    ms_events/     # classifier, severity, novelty, confirmation, KG routing
+    ms_impact/     # event study, abnormal returns, Bayesian posteriors
+    ms_features/   # feature registry, offline+online materialisers, linter
+    ms_models/     # training, CV harness, calibration, conformal, registry
+    ms_options/    # IV surface, greeks, structures, Monte Carlo, sizing
+    ms_risk/       # limits, kill switches, portfolio state
+    ms_sim/        # L2 event-driven simulator, fill + slippage models
+    ms_broker/     # broker adapters (paper + live), order state machine
+  services/
+    ingest_market/  ingest_news/  engine_event/  engine_predict/
+    engine_decide/  api_gateway/  ui_web/
+  jobs/
+    nightly_features.py  weekly_retrain.py  event_study_rebuild.py
+    postsession_outcomes.py  morning_briefing.py
+  tests/
+    unit/  replay/golden_day_2026_07_14/  stress/  parity/
+  notebooks/        # research only; never imported by services
+\end{lstlisting}
+
+\begin{longtable}{@{}p{3.8cm}p{10.8cm}@{}}
+\toprule
+\textbf{Convention} & \textbf{Rule}\\
+\midrule
+No magic numbers & Every threshold lives in \texttt{config/}, is loaded at
+startup, and its hash is logged with each decision.\\
+Schemas first & Every bus message has a versioned schema; consumers validate.
+Adding a field is allowed, changing a meaning requires a version bump.\\
+Notebooks are disposable & A notebook may never be imported by a service. If
+code matters, it moves into a library with tests.\\
+Time is explicit & No implicit \texttt{now()} in library code --- the clock is
+injected, so the simulator and production share the same code path.\\
+Live requires intent & Any function that can place a real order takes
+\texttt{live: bool = False} and logs loudly.\\
+Tests that matter & Determinism test, offline--online parity test, leakage
+linter, golden-day replay, stress scenarios. These run in CI on every commit.\\
+Gate discipline & \texttt{docs/gates.md} is the project's spine. No gate entry,
+no phase advance.\\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\chapter{Resources, Cost and Risk Register}
+% =====================================================================
+
+\section{Team shapes}
+
+\begin{longtable}{@{}p{3.0cm}p{4.0cm}p{7.6cm}@{}}
+\toprule
+\textbf{Shape} & \textbf{Timeline to G8} & \textbf{Notes}\\
+\midrule
+Solo (you) & 45--60 weeks & Entirely feasible. The binding constraint is
+data-engineering grind, not modelling. Expect Phases 1--2 to feel slow and
+unglamorous; they are the moat.\\
+Two people & 30--38 weeks & Optimal split: one owns data and infrastructure
+(P0--P2, P7 simulator, P8 ops), the other owns ML and research (P3--P6).\\
+Three to four & 24--30 weeks & Add a dedicated frontend and a research
+generalist. Beyond four, coordination cost exceeds benefit at this stage.\\
+\bottomrule
+\end{longtable}
+
+\section{Cost structure (relative, not absolute)}
+
+Prices change; the \emph{ratios} do not. Plan the budget in these proportions.
+
+\begin{longtable}{@{}p{4.4cm}p{2.6cm}p{7.6cm}@{}}
+\toprule
+\textbf{Item} & \textbf{Share of\newline year-1 spend} & \textbf{Comment}\\
+\midrule
+Historical option chain data & \textbf{Largest single item} & Unavoidable for a
+credible options backtest. Buy once, clean carefully, treat as an asset.\\
+Live market data (broker or vendor) & Moderate, recurring & Start on the broker
+feed; upgrade only when the gate demands it.\\
+News and social API tiers & Moderate, recurring & Start with 3--5 high-value
+sources rather than breadth.\\
+Compute (cloud VM in the correct region, storage) & Moderate, recurring & One
+solid VM plus fast disk beats a Kubernetes cluster at this stage.\\
+GPU for training & Small & Rent by the hour for training runs; do not buy or
+keep one running. Inference runs on CPU via ONNX.\\
+Trading capital at R1 & Deliberately tiny & Capital is the \emph{last} thing you
+spend, not the first.\\
+Legal/compliance consultation & Small, one-off & Cheaper than one regulatory
+problem.\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[title={Budget principle}]
+Spend on \textbf{data} first, \textbf{time} second, \textbf{compute} third and
+\textbf{trading capital} last. Most failed projects invert this exactly.
+\end{keybox}
+
+\section{Risk register}
+
+\begin{longtable}{@{}p{3.6cm}p{1.2cm}p{1.2cm}p{7.8cm}@{}}
+\toprule
+\textbf{Risk} & \textbf{Prob} & \textbf{Impact} & \textbf{Mitigation}\\
+\midrule
+\endhead
+No intraday directional edge exists at our data tier & High & High &
+Gate G5 tests this at week 24 for a fraction of the total cost. Pivot options
+are pre-defined: volatility-only, or the gap product.\\
+Historical option chain data unavailable or unaffordable & Med & High &
+Identify vendors and prices in Phase~0, not Phase~5. If truly blocked, restrict
+v1 to futures and the gap product.\\
+Backtest overfitting & \textbf{Very high} & \textbf{Very high} & Purged CV,
+embargo, combinatorial CV, deflated Sharpe, locked holdout evaluated once,
+experiment log. This is the default outcome unless actively fought.\\
+Live results diverge from paper & High & High & Run paper alongside live
+permanently; the gap is measured, not guessed. Capital ladder demotes instantly.\\
+Slippage larger than modelled & High & Med & Calibrate the slippage model from
+your own fills; require expected value to clear costs with margin.\\
+Fake or retracted news triggering a trade & Med & \textbf{Very high} &
+Multi-source confirmation, severity gating, retraction handling, the AP-hack CI
+test.\\
+Regime change invalidating models & High & Med & Regime-conditional models,
+drift monitors, automatic class disabling, scheduled retrains.\\
+Broker API outage or rejection mid-position & Med & High & Order state machine
+with reconciliation, flatten-on-failure drills, a manual override runbook.\\
+Regulatory change affecting retail algo access & Med & High & Compliance memo
+maintained; architecture keeps the human-approval mode as a first-class path,
+not a hack.\\
+Data licensing violation when adding users & Med & High & Legal review before
+Tier T5. Do not show live exchange prices to third parties without a licence.\\
+Solo-developer burnout & \textbf{High} & High & Phase~4 ships a real product at
+week 18. Weekly gates give visible progress. The plan is explicitly designed so
+that stopping at any gate still leaves something valuable.\\
+Scope creep (adding stocks, crypto, more countries) & Very high & Med &
+Chapter~2 scope decisions are frozen until G8. Write new ideas in a backlog
+file; do not build them.\\
+\bottomrule
+\end{longtable}
+
+\section{What ``done'' looks like at each tier, restated as artefacts}
+
+\begin{longtable}{@{}p{1.6cm}p{13.0cm}@{}}
+\toprule
+\textbf{Tier} & \textbf{The artefact that proves it}\\
+\midrule
+T0 & A year of complete, replayable, point-in-time data on disk with automated
+quality reports.\\
+T1 & An automated daily note explaining yesterday's moves, rated by you against
+reality for 20 sessions.\\
+T2 & A reliability diagram from live paper trading with a slope near 1 and a
+positive Brier skill score.\\
+T3 & A signed G8 record: 60 sessions, 150 trades, positive expectancy after
+costs, live matching simulated.\\
+T4 & A broker statement showing real fills on ladder rung R1, and a paper-versus-live
+divergence chart within tolerance.\\
+T5 & A legal opinion, a data licence, a multi-tenant deployment and an SLO
+report.\\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\appendix
+% =====================================================================
+\chapter{Reference Formulas}
+
+\section*{Black--Scholes / Black-76 Greeks}
+With $d_1 = \dfrac{\ln(F/K) + \tfrac{1}{2}\sigma^2 T}{\sigma\sqrt{T}}$,
+$d_2 = d_1 - \sigma\sqrt{T}$, discount factor $D = e^{-rT}$:
+\[
+\begin{aligned}
+C &= D\big[F\,N(d_1) - K\,N(d_2)\big], &
+P &= D\big[K\,N(-d_2) - F\,N(-d_1)\big],\\
+\Delta_C &= D\,N(d_1), &
+\Gamma &= \frac{D\,\phi(d_1)}{F\sigma\sqrt{T}},\\
+\mathcal{V} &= D\,F\,\phi(d_1)\sqrt{T}, &
+\Theta_C &= -\frac{D F \phi(d_1)\sigma}{2\sqrt{T}} - rDKN(d_2)+rDFN(d_1).
+\end{aligned}
+\]
+
+\section*{Intraday scaling of implied volatility}
+\[
+\sigma_{h\text{ minutes}} = \sigma_{\text{annual}}\sqrt{\frac{h}{375\times252}},
+\qquad
+\text{Implied move}_h = S\,\sigma_{h}.
+\]
+
+\section*{Range-based realised volatility (Garman--Klass)}
+\[
+\sigma^2_{GK} = \tfrac{1}{2}\big(\ln \tfrac{H}{L}\big)^2
+- (2\ln 2 - 1)\big(\ln \tfrac{C}{O}\big)^2 .
+\]
+
+\section*{HAR-RV volatility model}
+\[
+RV_{t+1} = \beta_0 + \beta_d RV_t^{(d)} + \beta_w RV_t^{(w)}
++ \beta_m RV_t^{(m)} + \varepsilon_{t+1},
+\]
+with daily, weekly and monthly averages of realised variance. Add a
+gradient-boosted model on the residual with event features.
+
+\section*{Order-flow imbalance}
+\[
+OFI_t = \sum_{i \in \text{window}}
+\big[\mathbb{1}_{\{P^b_i \ge P^b_{i-1}\}} q^b_i - \mathbb{1}_{\{P^b_i \le P^b_{i-1}\}} q^b_{i-1}
+- \mathbb{1}_{\{P^a_i \le P^a_{i-1}\}} q^a_i + \mathbb{1}_{\{P^a_i \ge P^a_{i-1}\}} q^a_{i-1}\big].
+\]
+
+\section*{Pinball (quantile) loss}
+\[
+L_\alpha(y,\hat q_\alpha) =
+\begin{cases}
+\alpha\,(y - \hat q_\alpha) & y \ge \hat q_\alpha\\
+(1-\alpha)(\hat q_\alpha - y) & y < \hat q_\alpha
+\end{cases}
+\]
+
+\section*{Continuous ranked probability score}
+\[
+\text{CRPS}(F, y) = \int_{-\infty}^{\infty}\big(F(x) - \mathbb{1}_{\{x \ge y\}}\big)^2 dx
+\;\approx\; \frac{1}{N}\sum_i |x_i - y| - \frac{1}{2N^2}\sum_{i,j}|x_i - x_j|
+\]
+for $N$ sampled paths $x_i$ --- directly computable from the Monte Carlo output.
+
+\section*{Brier score decomposition}
+\[
+BS = \underbrace{\text{Reliability}}_{\text{lower is better}}
+- \underbrace{\text{Resolution}}_{\text{higher is better}}
++ \underbrace{\text{Uncertainty}}_{\text{fixed by the data}}
+\]
+
+\section*{Fractional Kelly}
+\[
+f^{*} = \frac{p b - (1-p)}{b}, \qquad f_{\text{used}} = \min(0.25 f^{*}, f_{\max}).
+\]
+
+\section*{Deflated Sharpe ratio (concept)}
+Given $N$ independent strategy trials, the expected maximum Sharpe under the null
+grows roughly with $\sqrt{2\ln N}$. Always report how many variants were tested;
+an unreported trial count makes any Sharpe ratio meaningless.
+
+\chapter{Event Taxonomy Skeleton (YAML)}
+
+\begin{lstlisting}[caption={config/taxonomy.yaml --- abridged}]
+version: 1
+families:
+  monetary:
+    classes:
+      rate_decision:      {sev_range: [6,10], scheduled: true,  horizons: [5,15,30,60]}
+      stance_change:      {sev_range: [5,9],  scheduled: true}
+      liquidity_measure:  {sev_range: [4,8],  scheduled: false}
+      unscheduled_action: {sev_range: [8,10], scheduled: false}
+  macro:
+    classes:
+      inflation_release:  {sev_range: [4,8], scheduled: true, needs_consensus: true}
+      growth_release:     {sev_range: [4,8], scheduled: true, needs_consensus: true}
+      trade_balance:      {sev_range: [3,6], scheduled: true, needs_consensus: true}
+  geopolitical:
+    classes:
+      military_action:    {sev_range: [6,10], scheduled: false, require_sources: 2}
+      escalation_rhetoric:{sev_range: [3,7],  scheduled: false, require_sources: 2}
+      sanctions:          {sev_range: [4,8],  scheduled: false}
+  energy:
+    classes:
+      production_quota:   {sev_range: [5,9], scheduled: true}
+      supply_disruption:  {sev_range: [4,9], scheduled: false}
+  flows:
+    classes:
+      expiry_pinning:     {sev_range: [3,6], scheduled: true, intraday_only: true}
+      oi_shift:           {sev_range: [3,6], scheduled: false}
+  noise:
+    classes:
+      opinion:            {sev_range: [0,2], tradeable: false}
+      repetition:         {sev_range: [0,1], tradeable: false}
+
+gates:                       # applied before any directional signal
+  min_severity: 5.0
+  min_credibility: 0.75
+  min_novelty: 0.45
+  max_already_priced: 0.6
+  min_effective_sample: 8
+\end{lstlisting}
+
+\chapter{Glossary}
+
+\begin{longtable}{@{}p{3.8cm}p{10.8cm}@{}}
+\toprule
+\textbf{Term} & \textbf{Meaning in this document}\\
+\midrule
+Abnormal return & Return minus what was expected given time of day, regime and
+day type. The correct unit for event studies.\\
+Calibration & Whether stated probabilities match realised frequencies.\\
+Conformal prediction & A method producing prediction intervals with
+distribution-free finite-sample coverage guarantees.\\
+CRPS & A proper scoring rule for a full predictive distribution.\\
+Dealer gamma exposure & Aggregate options-dealer gamma; when negative, hedging
+amplifies moves.\\
+Edge realisation & The regression slope of realised edge on predicted edge.
+A slope near zero means no usable edge, regardless of hit rate.\\
+Embargo & A buffer period dropped after each test fold to prevent leakage from
+serial correlation.\\
+Implied move & The move the option market has already priced for a horizon.\\
+IV crush & A fall in implied volatility that can make a directionally correct
+option trade lose money.\\
+Meta-labelling & A second model that decides whether to act on the first
+model's signal.\\
+Novelty & Whether an item carries genuinely new information not already priced.\\
+Point-in-time & Data as it was actually knowable at a past moment, including
+timestamps and later revisions.\\
+Purged CV & Cross-validation that removes training samples whose outcome windows
+overlap the test window.\\
+Regime & A market state (volatility, trend, liquidity) that conditions all other
+models.\\
+Triple barrier & Labelling by which of the upper, lower or time barrier is hit
+first.\\
+Volatility risk premium & Implied volatility minus forecast realised volatility;
+the core edge for volatility structures.\\
+\bottomrule
+\end{longtable}
+
+\chapter{Final Word}
+
+\begin{keybox}[title={The three sentences that matter}]
+\begin{enumerate}
+\item \textbf{Start the recorder tonight.} Models can be rebuilt; history cannot
+be recovered.
+\item \textbf{Gate G5 at week 24 is the real project.} Everything before it
+exists to make that test honest; everything after it exists to exploit a
+positive answer safely.
+\item \textbf{Calibration, not accuracy, is the product.} A system that knows
+what it does not know is the only kind that survives contact with a live market.
+\end{enumerate}
+\end{keybox}
+
+\vspace{8pt}
+This blueprint is deliberately harder than the original concept, because the
+original concept was designed to impress and this one is designed to survive.
+The vision is unchanged: watch the world, understand the impact, forecast the
+distribution, recommend the trade, and score yourself in public. The difference
+is that every claim here has a test attached to it, and every test has a date.

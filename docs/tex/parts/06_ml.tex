@@ -1,0 +1,328 @@
+% =====================================================================
+\chapter{Feature Store and Feature Catalogue}
+\label{ch:features}
+% =====================================================================
+
+\section{Why a feature store and not a script}
+
+The most common cause of a backtest that works and a live system that does not
+is \term{train/serve skew}: the offline feature was computed differently from
+the online one. The rule is absolute.
+
+\begin{keybox}[title={One definition, two materialisations}]
+A feature is defined \emph{once}, in one function, with an explicit dependency
+list and an as-of timestamp. The offline path runs it over Parquet history; the
+online path runs the same function over Redis state. A CI test replays a live
+day offline and asserts every feature matches to within floating-point
+tolerance. If it does not match, the build fails.
+\end{keybox}
+
+\begin{lstlisting}[language=Python,caption={Feature definition pattern}]
+@feature(name="ofi_60s", version=3, deps=["book.bid","book.ask"],
+         window="60s", ttl="5s", fill="ffill_max_2")
+def order_flow_imbalance(book: BookWindow) -> float:
+    """Signed order-flow imbalance over the trailing 60 seconds.
+    Point-in-time safe: reads only data with ts <= as_of."""
+    ...
+
+# Offline: engine.materialise(ofi_60s, start, end) -> Parquet column
+# Online : engine.serve(ofi_60s, as_of=now)        -> float from Redis
+# CI     : assert_offline_online_parity(ofi_60s, sample_day)
+\end{lstlisting}
+
+\section{Feature catalogue}
+
+\subsection{Group A --- Price and trend (the baseline)}
+
+\begin{longtable}{@{}p{4.6cm}p{4.0cm}p{5.6cm}@{}}
+\toprule
+\textbf{Feature} & \textbf{Windows} & \textbf{Rationale}\\
+\midrule
+Log returns & 1, 2, 5, 15, 30, 60 min & Raw momentum at several scales.\\
+Return z-score vs time-of-day baseline & same & Normalises the U-shaped
+intraday volatility profile. \textbf{Critical.}\\
+Realised volatility (Parkinson, Garman--Klass, Rogers--Satchell) & 5, 15, 30, 60
+min & Range-based estimators are far more efficient than close-to-close.\\
+Bipower variation and jump component & 30 min & Separates continuous
+volatility from jumps; events cause jumps.\\
+Distance from VWAP, from opening range, from previous close & session & Standard
+intraday anchors that real traders actually watch.\\
+Position within the day's range & session & Mean-reversion versus breakout
+context.\\
+Trend strength / efficiency ratio & 15, 30 min & Distinguishes a directional
+move from chop; regime information.\\
+Autocorrelation of 1-min returns & 30 min & Negative values signal a
+mean-reverting microstructure regime.\\
+\bottomrule
+\end{longtable}
+
+\subsection{Group B --- Microstructure (where the short-horizon edge lives)}
+
+\begin{longtable}{@{}p{4.6cm}p{4.0cm}p{5.6cm}@{}}
+\toprule
+\textbf{Feature} & \textbf{Windows} & \textbf{Rationale}\\
+\midrule
+Order-flow imbalance (OFI) & 10, 30, 60 s & Best-in-class short-horizon
+directional predictor when book data is available.\\
+Bid--ask spread and its z-score & 30 s & Widening spreads precede volatility and
+raise transaction cost --- feeds both the model and the cost model.\\
+Depth imbalance at top levels & instantaneous & Directional pressure.\\
+Trade-sign imbalance (tick rule / Lee--Ready) & 60 s & Aggressor direction.\\
+Volume-clock and VPIN-style toxicity proxy & 50 buckets & Flow toxicity spikes
+before large moves.\\
+Large-trade ratio & 60 s & Institutional participation proxy.\\
+Quote update intensity & 10 s & Attention and uncertainty proxy.\\
+Futures basis (future minus spot) & instantaneous & Basis moves often lead spot.\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[title={Availability caveat}]
+Full order-book depth may not be available on a retail broker feed. Design the
+model so Group~B is optional: train two variants, with and without
+microstructure, and let the serving layer select by feed capability. Never
+train on features you will not have at 09:16 on a live Tuesday.
+\end{warnbox}
+
+\subsection{Group C --- Options-derived (the most differentiated group)}
+
+\begin{longtable}{@{}p{4.8cm}p{3.4cm}p{6.0cm}@{}}
+\toprule
+\textbf{Feature} & \textbf{Update} & \textbf{Rationale}\\
+\midrule
+ATM implied volatility, both expiries & 1--5 s & Level of expected volatility.\\
+IV term structure slope (near vs next expiry) & 5 s & Inversion signals expected
+near-term event risk.\\
+25-delta risk reversal (skew) & 5 s & The market's directional fear;
+one of the strongest single option-derived predictors.\\
+Butterfly / smile convexity & 5 s & Tail pricing.\\
+IV rank and IV percentile & daily & Is volatility cheap or expensive in context?\\
+Put-call ratio, by volume and by open interest & 1 min & Positioning and
+sentiment.\\
+Open-interest change by strike, call and put & 1 min & Where new positions are
+being built --- writers define support and resistance.\\
+Max pain and distance to it & 5 min & Expiry-week pinning effect.\\
+Estimated dealer gamma exposure (GEX) & 1 min & Positive gamma dampens moves,
+negative gamma amplifies them. \textbf{Regime-defining.}\\
+Implied move for the remaining session & 1 min & The denominator of the trade
+filter in Chapter~\ref{ch:reality}.\\
+Volatility risk premium (IV minus forecast realised) & 5 min & The core edge for
+volatility structures.\\
+\bottomrule
+\end{longtable}
+
+\subsection{Group D --- Cross-asset and global}
+
+Overnight and same-session values of: global equity futures, regional indices,
+crude, gold, dollar index, USD/INR, US yields, and a global-risk composite
+(first principal component of a basket of risk assets). Include both level
+changes and z-scores versus their own trailing distributions.
+
+\subsection{Group E --- Event features}
+
+\begin{longtable}{@{}p{4.4cm}p{10.2cm}@{}}
+\toprule
+\textbf{Feature} & \textbf{Note}\\
+\midrule
+Event class one-hot / embedding & Learned embedding is better once enough
+history exists.\\
+Calibrated severity, polarity, novelty, credibility, confidence & From
+Chapter~\ref{ch:event}.\\
+Surprise $z$-score & For scheduled releases; the single most powerful macro
+feature.\\
+Prior impact posterior (mean, spread, $n_{\text{eff}}$) & From
+Chapter~\ref{ch:impact}. Feeding the prior in as a feature lets the model learn
+when to trust it.\\
+Seconds since event & The decay clock.\\
+Event density in trailing 30 min & Multiple simultaneous events change dynamics.\\
+Conflict flag & Opposing events present.\\
+\bottomrule
+\end{longtable}
+
+\subsection{Group F --- Calendar, regime and session}
+
+Minutes since open, minutes to close, day of week, days to weekly expiry, days
+to monthly expiry, expiry-day flag, budget/policy-day flag, holiday-adjacent
+flag, current regime label from the regime model, trailing 20-day realised
+volatility percentile, and recent trend regime.
+
+\begin{keybox}[title={Feature hygiene}]
+Target roughly 120--250 engineered features, not thousands. Run
+\textbf{Purged Group Time-Series CV} feature importance and drop anything that
+does not survive. High-cardinality raw features and features with any dependence
+on future information are removed automatically by a leakage linter that checks
+each feature's dependency timestamps.
+\end{keybox}
+
+% =====================================================================
+\chapter{Prediction Models}
+\label{ch:ml}
+% =====================================================================
+
+\section{Labelling: the decision that determines everything}
+
+Predicting ``next candle up or down'' is the wrong label because it does not
+correspond to a tradeable decision. Use the \term{triple-barrier} method.
+
+\begin{center}
+\begin{tikzpicture}[scale=1.0]
+\draw[->,thick,msgrey] (0,0) -- (8.6,0) node[right,font=\scriptsize]{time};
+\draw[->,thick,msgrey] (0,-1.9) -- (0,1.9) node[above,font=\scriptsize]{price};
+\draw[dashed,msgreen,thick] (0,1.3) -- (7.2,1.3) node[right,font=\scriptsize,black]{upper barrier $+k\sigma$};
+\draw[dashed,msred,thick]   (0,-1.3) -- (7.2,-1.3) node[right,font=\scriptsize,black]{lower barrier $-k\sigma$};
+\draw[dashed,msblue,thick]  (7.2,-1.7) -- (7.2,1.7) node[above,font=\scriptsize,black]{time barrier $h$};
+\draw[msblue,very thick] (0,0) .. controls (1.4,0.4) and (2.4,-0.5) .. (3.2,0.35)
+                         .. controls (4.2,1.0) and (4.6,0.9) .. (5.0,1.31);
+\fill[msgreen] (5.0,1.31) circle (2.4pt) node[above right,font=\scriptsize,black]{label $= +1$};
+\node[font=\scriptsize,anchor=north] at (0,-0.1) {$t_0$ (event)};
+\end{tikzpicture}
+\end{center}
+
+\begin{longtable}{@{}p{3.6cm}p{11.0cm}@{}}
+\toprule
+\textbf{Choice} & \textbf{Specification}\\
+\midrule
+Barriers & Upper and lower at $\pm k\sigma_t$ where $\sigma_t$ is the
+\emph{current} volatility estimate (not a fixed point value). $k$ tuned per
+horizon; start with $k=1.5$.\\
+Time barrier & $h \in \{5, 15, 30\}$ minutes and always before the session close.\\
+Label & $+1$ upper hit first, $-1$ lower hit first, $0$ time barrier hit.\\
+Sample weights & Weight each sample by uniqueness (overlapping outcome windows
+are not independent) and by absolute realised return.\\
+Meta-labelling & A second model predicts \emph{whether the primary model's call
+should be taken}. Primary model decides side; meta model decides size, including
+size zero. This consistently improves precision.\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[title={Why triple-barrier changes the product}]
+It directly encodes stop-loss and target into the label. A model trained this way
+is answering the question you actually care about --- ``if I enter now with this
+stop and this target, do I win?'' --- rather than an academic question about
+candle colour.
+\end{keybox}
+
+\section{Cross-validation without lying to yourself}
+
+\begin{longtable}{@{}p{3.8cm}p{10.8cm}@{}}
+\toprule
+\textbf{Technique} & \textbf{Why it is mandatory}\\
+\midrule
+Purged K-fold & Remove training samples whose outcome window overlaps the test
+window. Without purging, the model sees the answer.\\
+Embargo & Additionally drop a buffer (e.g. 1 trading day) after each test fold
+to kill serial-correlation leakage.\\
+Walk-forward (anchored and rolling) & The only evaluation that resembles
+production. Report both.\\
+Combinatorial purged CV & Generates many backtest paths, giving a
+\emph{distribution} of Sharpe ratios rather than one lucky number.\\
+Deflated Sharpe ratio & Corrects for the number of strategy variants tried.
+If you tested 200 configurations, your best Sharpe is inflated --- quantify it.\\
+Event-level splitting & Never split the same event's samples across train and
+test. Group by event ID.\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[title={Leakage checklist --- run before believing any result}]
+\begin{enumerate}
+\item Does any feature use data with a timestamp after the decision time?
+\item Is normalisation (mean/std, scaler) fitted on the full dataset instead of
+train only?
+\item Are volatility estimates computed with a centred window?
+\item Are labels from overlapping windows present in both train and test?
+\item Was feature selection done before the split?
+\item Does the news timestamp reflect publication or the time you downloaded it?
+\item Is the option chain snapshot the one available at decision time, or the
+end-of-day file?
+\item Are corporate actions and index reconstitutions handled point-in-time?
+\end{enumerate}
+Any single ``yes'' invalidates the result. Most spectacular backtests die here.
+\end{warnbox}
+
+\section{Model portfolio}
+
+Do not build one model. Build a small ensemble of models with genuinely
+different inductive biases, then combine them.
+
+\begin{longtable}{@{}p{3.2cm}p{3.4cm}p{7.8cm}@{}}
+\toprule
+\textbf{Model} & \textbf{Predicts} & \textbf{Role and notes}\\
+\midrule
+M0 Rules baseline & direction & Simple event-prior lookup plus momentum filter.
+\textbf{Every ML model must beat this or it does not ship.} Also the
+degraded-mode fallback.\\
+M1 LightGBM & $P(\text{up})$, triple-barrier class & The workhorse. Handles
+tabular heterogeneous features and missing values, trains in minutes, is
+interpretable via SHAP. Expect this to be your best model for a long time.\\
+M2 Quantile LightGBM & $q_{05},q_{25},q_{50},q_{75},q_{95}$ of $r_h$ &
+Pinball loss. Feeds the fan chart directly.\\
+M3 Temporal CNN / TCN & direction and magnitude & Learns local shape patterns
+from raw candle and microstructure sequences that hand-crafted features miss.\\
+M4 Sequence transformer & multi-horizon distribution & Attention over the last
+$N$ minutes plus event tokens. Highest ceiling, highest overfitting risk, needs
+the most data. \textbf{Build this last, not first.}\\
+M5 Volatility model & $\sigma_{t+h}$ & HAR-RV baseline plus a gradient-boosting
+correction on the residual. Volatility is the most forecastable target ---
+give it a dedicated, well-tuned model.\\
+M6 IV-change model & $\Delta\sigma_{IV}$ & Predicts implied volatility movement.
+\textbf{Directly determines options profitability.} Features: current IV rank,
+event class, term-structure slope, time to expiry, realised-implied spread.\\
+M7 Meta-labeller & take / skip & Trained on primary model outputs plus market
+state. Its job is to say no.\\
+M8 Regime classifier & regime label & Hidden Markov model or clustering over
+volatility, trend and liquidity. Everything else is conditioned on it.\\
+\bottomrule
+\end{longtable}
+
+\section{Ensembling and calibration}
+
+\begin{enumerate}
+\item \term{Stacking with time-aware folds.} Out-of-fold predictions from
+M1--M4 become inputs to a simple logistic regression meta-learner. Keep the
+meta-learner simple; a complex stacker overfits immediately.
+\item \term{Regime-conditional weights.} Model weights vary by regime from M8;
+a transformer that shines in trending regimes may be useless in chop.
+\item \term{Probability calibration.} Fit isotonic regression or Platt scaling on
+a held-out, chronologically later slice. Then verify with a reliability diagram
+and the Brier score decomposition (reliability, resolution, uncertainty).
+\item \term{Conformal prediction.} Wrap the magnitude forecast in split conformal
+intervals to obtain finite-sample coverage guarantees. When the interval is too
+wide to be tradeable, the honest answer is no trade --- and now the system can
+prove it.
+\end{enumerate}
+
+\begin{keybox}[title={The calibration contract}]
+The dashboard's headline metric is not accuracy. It is the reliability diagram:
+of all the times the system said 60\%, how often was it right? A system that is
+calibrated can be sized correctly. A system that is accurate but overconfident
+will still blow up.
+\end{keybox}
+
+\section{Training loop and retraining policy}
+
+\begin{longtable}{@{}p{3.6cm}p{3.2cm}p{7.6cm}@{}}
+\toprule
+\textbf{Job} & \textbf{Cadence} & \textbf{Detail}\\
+\midrule
+Nightly feature materialisation & Daily 18:00 & Recompute the day's features,
+run quality gates, append to Parquet.\\
+Incremental retrain & Weekly (weekend) & Refit M1, M2, M5, M6 on the expanded
+window; run walk-forward; promote only if it beats the incumbent on the
+last 4 weeks out-of-sample.\\
+Full retrain and architecture search & Quarterly & Includes M3/M4
+hyperparameters and feature re-selection.\\
+Impact library rebuild & Weekly & New events added; posteriors updated.\\
+Calibration refresh & Weekly & Isotonic refit on the most recent 4 weeks.\\
+Drift monitor & Continuous & PSI on features, KL divergence on prediction
+distribution, rolling Brier score. Breach triggers alert and blocks
+auto-execution.\\
+Champion/challenger & Continuous & The challenger runs in shadow mode on live
+data for at least 15 sessions before it may be promoted.\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[title={Anti-overfitting discipline}]
+Keep a \textbf{locked holdout}: the most recent 3 months of data, encrypted and
+untouched. You may evaluate against it \emph{once}, at the Phase~7 gate.
+Every additional peek burns the only honest estimate you will ever have.
+Log every experiment; deflate your Sharpe by the number of trials.
+\end{warnbox}

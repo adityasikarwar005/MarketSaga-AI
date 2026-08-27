@@ -1,0 +1,389 @@
+% =====================================================================
+\chapter{System Architecture}
+\label{ch:arch}
+% =====================================================================
+
+\section{The nine-plane view}
+
+The system is decomposed into nine planes. Each plane is independently
+deployable, independently testable, and communicates only through the event bus
+with versioned schemas. A plane may never reach into another plane's database.
+
+\begin{center}
+\begin{tikzpicture}[node distance=4mm,every node/.append style={transform shape},scale=1]
+
+% Plane 1 - sources
+\node[wide,fill=white] (n1) {Social \& short-form feeds};
+\node[wide,fill=white,right=of n1] (n2) {Wires, RSS, gov / central-bank releases};
+\node[wide,fill=white,right=of n2] (n3) {Economic calendar + consensus};
+\node[wide,fill=white,right=of n3] (n4) {Market \& option-chain feed};
+\node[lay,fit=(n1)(n2)(n3)(n4),label={[font=\scriptsize\bfseries,color=msblue]above:PLANE 1 --- SOURCES}] (P1) {};
+
+% Plane 2 - ingest
+\node[wide,below=16mm of n1.south west,anchor=north west] (i1) {Collectors\\(async, per-source)};
+\node[wide,right=of i1] (i2) {Normaliser\\+ publish-time resolver};
+\node[wide,right=of i2] (i3) {Dedup: SimHash\\+ embedding ANN};
+\node[wide,right=of i3] (i4) {Tick handler\\+ candle builder};
+\node[lay,fit=(i1)(i2)(i3)(i4),label={[font=\scriptsize\bfseries,color=msblue]above:PLANE 2 --- INGEST \& NORMALISATION}] (P2) {};
+
+% Plane 3 - bus
+\node[wide,below=14mm of i1.south west,anchor=north west,text width=13.0cm] (bus)
+ {\textbf{PLANE 3 --- EVENT BUS} \; (Redis Streams / NATS JetStream) \;\; topics:
+  \texttt{raw.news} $\cdot$ \texttt{event.classified} $\cdot$ \texttt{market.tick} $\cdot$
+  \texttt{feature.snapshot} $\cdot$ \texttt{signal.pred} $\cdot$ \texttt{trade.reco} $\cdot$ \texttt{audit.*}};
+
+% Plane 4-6
+\node[wide,below=12mm of bus.south west,anchor=north west] (e1) {Event Detection\\(2-tier NLP)};
+\node[wide,right=of e1] (e2) {Impact Scoring\\(Bayesian priors)};
+\node[wide,right=of e2] (e3) {Feature Store\\(online + offline)};
+\node[wide,right=of e3] (e4) {Prediction\\Ensemble};
+\node[lay,fit=(e1)(e2)(e3)(e4),label={[font=\scriptsize\bfseries,color=msblue]above:PLANES 4--6 --- INTELLIGENCE}] (P4) {};
+
+% Plane 7-8
+\node[wide,below=14mm of e1.south west,anchor=north west] (o1) {Candle Projector\\(quantile fan)};
+\node[wide,right=of o1] (o2) {IV Surface\\+ Greeks};
+\node[wide,right=of o2] (o3) {Structure Selector\\+ Sizing};
+\node[wide,right=of o3] (o4) {Risk Gate\\+ Kill switches};
+\node[lay,fit=(o1)(o2)(o3)(o4),label={[font=\scriptsize\bfseries,color=msblue]above:PLANES 7--8 --- DECISION}] (P7) {};
+
+% Plane 9
+\node[wide,below=14mm of o1.south west,anchor=north west,text width=13.0cm] (ui)
+ {\textbf{PLANE 9 --- SURFACE} \; Live dashboard $\cdot$ mobile alerts $\cdot$
+  paper-trade ledger $\cdot$ calibration report $\cdot$ audit replay};
+
+\draw[ar] (P1) -- (P2);
+\draw[ar] (P2) -- (bus);
+\draw[ar] (bus) -- (P4);
+\draw[ar] (P4) -- (P7);
+\draw[ar] (P7) -- (ui);
+\draw[arg] (ui.east) -- ++(0.6,0) |- node[pos=0.25,right,font=\scriptsize\itshape,text width=1.6cm]{outcome feedback} (P4.east);
+\end{tikzpicture}
+\end{center}
+
+\section{Plane responsibilities and contracts}
+
+\begin{longtable}{@{}p{2.2cm}p{5.4cm}p{6.8cm}@{}}
+\toprule
+\textbf{Plane} & \textbf{Owns} & \textbf{Hard contract it must honour}\\
+\midrule
+\endhead
+1 Sources & Nothing (external) & Every item must carry an original publish
+timestamp or be flagged \texttt{ts\_uncertain}.\\
+2 Ingest & Collectors, normaliser, dedup, candle builder & Emits only immutable,
+schema-versioned records. Never mutates history. Idempotent on replay.\\
+3 Bus & Ordering, durability, replay & At-least-once delivery, consumer groups,
+7-day retention hot, cold archive to Parquet.\\
+4 Event & Taxonomy classification, entity extraction, novelty, credibility &
+Emits an \texttt{Event} with class, severity, confidence, entities, novelty and
+credibility. Never emits a trade opinion.\\
+5 Impact & Historical conditional response distributions & Emits a distribution
+over index returns per horizon, plus sample size and confidence interval.
+Refuses to answer when $n < 8$.\\
+6 Features & Online and offline feature computation & \emph{Identical code path}
+for training and serving. Every feature carries an as-of timestamp.\\
+7 Prediction & Direction, magnitude, volatility, quantiles & Outputs calibrated
+probabilities and conformal intervals. Must attach model version and feature
+hash.\\
+8 Decision & Structure choice, sizing, risk & May veto anything. Owns all
+kill-switches. Writes an immutable decision record with full reasoning.\\
+9 Surface & Presentation, alerting, ledger & Read-only with respect to trading
+state; may not influence decisions.\\
+\bottomrule
+\end{longtable}
+
+\section{Two speed lanes}
+
+A recurring failure in such systems is trying to make everything fast. Instead,
+split explicitly:
+
+\begin{longtable}{@{}p{3.2cm}p{5.4cm}p{5.8cm}@{}}
+\toprule
+& \textbf{Hot lane (reflex)} & \textbf{Cold lane (deliberation)}\\
+\midrule
+Latency budget & Under 400 ms end to end & 1--60 seconds\\
+Triggered by & Breaking event, price shock, scheduled release & Every event,
+plus a 5-second heartbeat\\
+Models used & Quantised, pre-warmed, small; rules and lookups & Full ensemble,
+LLM reasoning, cross-source confirmation, Monte Carlo\\
+Output & Provisional alert with wide intervals & Full recommendation with
+structure and sizing\\
+Can it place an order? & No. Never. & Yes (once Tier T4 is reached)\\
+Rationale & Speed without confirmation is how you trade a fake headline &
+Confirmation without speed misses the move; two lanes get both\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[title={The two-lane rule}]
+The hot lane says \emph{``something is happening, widen your risk''}.
+The cold lane says \emph{``here is the trade''}. Conflating them is the design
+error that turns a research system into an account-destroying machine.
+\end{keybox}
+
+\section{Technology choices with justification}
+
+\begin{longtable}{@{}p{3.0cm}p{4.0cm}p{7.4cm}@{}}
+\toprule
+\textbf{Layer} & \textbf{Choice} & \textbf{Why this, not the alternative}\\
+\midrule
+Language (services) & Python 3.12 + \texttt{asyncio} + \texttt{uvloop} &
+Ecosystem for ML is decisive. \texttt{uvloop} closes most of the gap for I/O
+bound work. Rewrite only the proven hot path later, if profiling demands it.\\
+Language (hot path, later) & Rust (via PyO3) & Only for the tick handler and
+candle builder if p99 exceeds budget. Do not start here.\\
+API & FastAPI & Async, typed, automatic OpenAPI, WebSocket support.\\
+Event bus & Redis Streams (v1) $\to$ NATS JetStream (v2) & Redis Streams gives
+consumer groups and replay with zero extra infrastructure since Redis is
+already needed for the online feature store. Kafka is operationally heavy for a
+single-node start; NATS is the low-latency upgrade path.\\
+Time-series store & PostgreSQL + TimescaleDB & Hypertables, continuous
+aggregates for candle roll-ups, compression, and plain SQL. Avoids a separate
+query language.\\
+Research store & Parquet on local NVMe + DuckDB & Backtests are analytical
+scans, not point lookups. DuckDB over Parquet is dramatically faster and
+simpler than querying the OLTP database.\\
+Online feature store & Redis (hashes + sorted sets) & Sub-millisecond reads,
+TTL semantics match feature freshness.\\
+Vector search & FAISS or \texttt{pgvector} & Deduplication and
+nearest-historical-event retrieval. \texttt{pgvector} first for operational
+simplicity.\\
+Model training & PyTorch, LightGBM, scikit-learn & LightGBM is the baseline that
+usually wins on tabular features; PyTorch for sequence and distribution models.\\
+Model serving & ONNX Runtime & Removes Python overhead at inference; consistent
+across CPU and GPU; batch-1 latency is what matters here.\\
+NLP models & A financial-domain encoder for sentiment/classification, a
+multilingual encoder for global sources, plus an LLM in the cold lane only &
+Encoders are fast and cheap; the LLM is reserved for reasoning where its latency
+is affordable.\\
+Orchestration & Prefect or Dagster & Nightly retrains, data quality checks,
+backfills. Airflow is heavier than needed.\\
+Experiment tracking & MLflow & Model registry plus metric lineage; the registry
+is what production reads from.\\
+Frontend & React + TypeScript + a lightweight charting library & TradingView's
+free charting library is acceptable for candles; the fan-chart overlay is custom
+canvas work.\\
+Transport to UI & WebSocket with binary framing (MessagePack) & JSON at 1 Hz per
+instrument is fine; at tick rate it is not.\\
+Containerisation & Docker Compose (v1) $\to$ Kubernetes (only at multi-user) &
+Kubernetes before Tier~T5 is pure overhead.\\
+Monitoring & Prometheus + Grafana + structured JSON logs + OpenTelemetry traces
+& A trace ID must flow from the news item all the way to the recommendation.\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[title={Deployment location matters more than framework choice}]
+Co-locate compute in the same cloud region as your broker/data endpoints
+(for NSE-facing infrastructure this generally means a Mumbai region). A poor
+region choice adds more latency than every micro-optimisation in this document
+combined.
+\end{warnbox}
+
+\section{Failure domains and degradation}
+
+\begin{longtable}{@{}p{3.8cm}p{4.2cm}p{6.4cm}@{}}
+\toprule
+\textbf{Failure} & \textbf{Detection} & \textbf{Degraded behaviour}\\
+\midrule
+News source down & No heartbeat for 90 s & Mark source stale; reduce credibility
+weight of single-source events; continue on market-only features.\\
+Market feed gap & Sequence gap or 3 s silence during market hours & Halt all new
+signals immediately. Flatten open paper positions at last known price. Alert.\\
+Model server unhealthy & p99 latency or error rate breach & Fall back to the
+rules-only baseline model, flag every output as \texttt{DEGRADED}, forbid
+auto-execution.\\
+Clock drift $>$ 50 ms & NTP monitor & Refuse to emit signals. Time integrity is
+non-negotiable for point-in-time correctness.\\
+Redis unavailable & Connection error & Hot lane stops; cold lane continues from
+TimescaleDB with a wider latency SLO.\\
+Contradictory events & Two opposing high-severity events within 60 s & Emit
+\texttt{CONFLICT}; suppress all directional signals; volatility signals only.\\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\chapter{Data Layer}
+% =====================================================================
+
+\section{Source catalogue}
+
+Sources are tiered by credibility. Credibility is a numeric weight used later in
+impact scoring, not a binary trust decision.
+
+\begin{longtable}{@{}p{4.0cm}p{2.3cm}p{2.3cm}p{5.6cm}@{}}
+\toprule
+\textbf{Source class} & \textbf{Credibility $c$} & \textbf{Typical lag} &
+\textbf{Role}\\
+\midrule
+Central bank / regulator official release & 1.00 & 0--2 s & Ground truth for
+policy events. Scrape the official page directly, not a news summary of it.\\
+Exchange notices & 1.00 & 0--5 s & Halts, bans, margin changes.\\
+Major international wires & 0.90 & 1--10 s & Primary breaking coverage.\\
+Verified official accounts of heads of state / ministries & 0.85 & 0--3 s &
+Highest-impact, highest-noise. Requires source-specific handling.\\
+Tier-1 national business media & 0.75 & 30--180 s & Confirmation, colour.\\
+Aggregator APIs & 0.60 & 60--600 s & Breadth, not speed.\\
+Anonymous social accounts & 0.15--0.35 & 0--5 s & Early warning only. May
+\emph{never} independently trigger a directional trade.\\
+Forums and community feeds & 0.10 & Variable & Sentiment aggregate only.\\
+\bottomrule
+\end{longtable}
+
+\subsection{Market data}
+
+\begin{longtable}{@{}p{4.0cm}p{3.2cm}p{7.0cm}@{}}
+\toprule
+\textbf{Stream} & \textbf{Frequency} & \textbf{Use}\\
+\midrule
+Index spot (Nifty, Bank Nifty, Fin Nifty) & Tick or 1/s & Base price series,
+candle construction.\\
+Index futures & Tick or 1/s & Basis, and it often leads spot.\\
+Full option chain (both indices, near two expiries) & 1--5 s snapshot &
+Implied volatility surface, open interest, put-call ratio, max pain,
+gamma exposure.\\
+India VIX & 1/s & Regime variable, volatility term structure anchor.\\
+GIFT/SGX Nifty & Tick & Overnight and pre-open leading indicator.\\
+Global futures (US equity index, crude, gold), DXY, USDINR & 1/s or 1-min &
+Cross-asset propagation, overnight event pricing.\\
+Sector indices & 1/s & Event-to-sector routing.\\
+Participant-wise open interest, FII/DII flows & End of day & Positioning
+regime features.\\
+Corporate actions, expiry calendar, holiday calendar & Static/daily &
+Absolutely required to avoid silent backtest corruption.\\
+\bottomrule
+\end{longtable}
+
+\section{The candle builder (and why it is subtle)}
+
+Building 1-minute candles from ticks looks trivial and is the most common source
+of quiet data corruption. Requirements:
+
+\begin{enumerate}
+\item \term{Exchange time, not local time.} Every timestamp normalised to
+exchange time with explicit timezone; store as UTC with an exchange-time view.
+\item \term{Left-closed, right-open intervals.} A tick at exactly 09:20:00.000
+belongs to the 09:20 candle, not 09:19.
+\item \term{Explicit gap handling.} If no tick arrives in a minute, emit a
+zero-volume candle with $O=H=L=C=$ previous close, flagged \texttt{synthetic}.
+Silent omission destroys sequence models.
+\item \term{Session boundaries.} Pre-open (09:00--09:15) is a different price
+formation mechanism; tag it, never mix it into continuous-session statistics.
+\item \term{Late ticks.} A tick arriving after its candle is sealed goes to a
+correction log; the candle is versioned, not overwritten in place.
+\item \term{Determinism.} Replaying the same tick file must yield a
+byte-identical candle file. Enforce this with a test.
+\end{enumerate}
+
+\section{Point-in-time discipline}
+
+\begin{keybox}[title={The three timestamps}]
+Every record carries three timestamps, always:
+\begin{itemize}
+\item \texttt{t\_event} --- when the thing happened in the world (publish time).
+\item \texttt{t\_ingest} --- when our system first saw it.
+\item \texttt{t\_available} --- when it became usable for a decision (after
+dedup, classification and feature computation).
+\end{itemize}
+\textbf{Backtests may only use data where \texttt{t\_available} $\le$ the
+decision time.} A feature computed from \texttt{t\_event} alone is look-ahead
+bias wearing a disguise.
+\end{keybox}
+
+Revised data (an economic figure corrected an hour later, an option chain
+snapshot re-published) is stored as a new row with a validity interval, never as
+an update. The research layer always reads ``the value as known at time $t$''.
+
+\section{Storage layout}
+
+\begin{lstlisting}[language=SQL,caption={Core TimescaleDB schema (abridged)}]
+-- Ticks: hypertable partitioned by day, compressed after 7 days
+CREATE TABLE tick (
+  ts            TIMESTAMPTZ   NOT NULL,
+  instrument_id INT           NOT NULL,
+  ltp           NUMERIC(12,2) NOT NULL,
+  qty           INT,
+  bid           NUMERIC(12,2), ask NUMERIC(12,2),
+  bid_qty       INT,           ask_qty INT,
+  oi            BIGINT,
+  seq           BIGINT        NOT NULL,   -- gap detection
+  src           SMALLINT      NOT NULL
+);
+SELECT create_hypertable('tick','ts', chunk_time_interval => INTERVAL '1 day');
+
+-- Candles: one row per (instrument, timeframe, bucket)
+CREATE TABLE candle (
+  ts TIMESTAMPTZ NOT NULL, instrument_id INT NOT NULL, tf SMALLINT NOT NULL,
+  o NUMERIC(12,2), h NUMERIC(12,2), l NUMERIC(12,2), c NUMERIC(12,2),
+  v BIGINT, oi BIGINT, trades INT,
+  vwap NUMERIC(12,2), synthetic BOOLEAN DEFAULT FALSE, version SMALLINT DEFAULT 1,
+  PRIMARY KEY (instrument_id, tf, ts, version)
+);
+
+-- Option chain snapshots
+CREATE TABLE option_snap (
+  ts TIMESTAMPTZ NOT NULL, underlying_id INT, expiry DATE,
+  strike NUMERIC(10,2), opt_type CHAR(2),
+  ltp NUMERIC(10,2), bid NUMERIC(10,2), ask NUMERIC(10,2),
+  volume BIGINT, oi BIGINT, oi_change BIGINT,
+  iv NUMERIC(6,3), delta NUMERIC(6,4), gamma NUMERIC(10,8),
+  theta NUMERIC(8,4), vega NUMERIC(8,4), rho NUMERIC(8,4),
+  spot NUMERIC(12,2)
+);
+
+-- News / event store: append-only, point-in-time
+CREATE TABLE news_raw (
+  id UUID PRIMARY KEY,
+  t_event TIMESTAMPTZ, t_ingest TIMESTAMPTZ NOT NULL, ts_uncertain BOOLEAN,
+  source_id INT NOT NULL, url TEXT, lang CHAR(3),
+  headline TEXT, body TEXT, content_hash BYTEA, simhash BIGINT,
+  embedding vector(768)
+);
+
+CREATE TABLE event_classified (
+  id UUID PRIMARY KEY, news_id UUID REFERENCES news_raw(id),
+  t_available TIMESTAMPTZ NOT NULL,
+  event_class TEXT NOT NULL, subclass TEXT,
+  severity NUMERIC(3,1), confidence NUMERIC(4,3),
+  novelty NUMERIC(4,3), credibility NUMERIC(4,3),
+  entities JSONB, geo JSONB, surprise NUMERIC(8,4),
+  model_version TEXT NOT NULL
+);
+\end{lstlisting}
+
+\begin{longtable}{@{}p{3.4cm}p{3.0cm}p{7.8cm}@{}}
+\toprule
+\textbf{Data} & \textbf{Hot store} & \textbf{Cold store / research}\\
+\midrule
+Ticks & TimescaleDB 7 days & Daily Parquet, partitioned
+\texttt{/date=/instrument=}\\
+Candles & TimescaleDB, all & Parquet mirror for DuckDB scans\\
+Option chain & TimescaleDB 30 days & Parquet, partitioned by date and expiry\\
+News \& events & PostgreSQL, all & Parquet + embeddings index\\
+Features & Redis (TTL 15 min) & Parquet feature snapshots per decision\\
+Decisions \& outcomes & PostgreSQL, all & Never deleted. This is the audit
+spine.\\
+\bottomrule
+\end{longtable}
+
+\section{Data quality gates (run continuously)}
+
+\begin{longtable}{@{}p{4.4cm}p{4.0cm}p{6.0cm}@{}}
+\toprule
+\textbf{Check} & \textbf{Threshold} & \textbf{Action on breach}\\
+\midrule
+Tick sequence gaps & any gap & Log, backfill from broker history, mark affected
+minute untrusted.\\
+Candle count per session & exactly 375 for continuous session & Block research
+jobs on that day until resolved.\\
+Option chain completeness & $\ge$ 95\% of expected strikes & Do not compute
+surface; mark surface stale.\\
+Implied volatility sanity & $0.03 < \sigma < 3.0$, no-arbitrage monotonic in
+strike & Reject the quote, use surface fit instead.\\
+Put-call parity deviation & beyond spread-implied bound & Flag stale quote; do
+not trade that strike.\\
+News timestamp sanity & \texttt{t\_event} $\le$ \texttt{t\_ingest} and within 7
+days & Set \texttt{ts\_uncertain}, exclude from latency-sensitive research.\\
+Duplicate rate & $<$ 3\% post-dedup & Retune dedup thresholds.\\
+Feature null rate & $<$ 1\% per feature per day & Block model training.\\
+Train/serve skew & feature distribution PSI $< 0.2$ & Alert; investigate before
+next retrain.\\
+\bottomrule
+\end{longtable}

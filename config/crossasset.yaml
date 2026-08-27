@@ -1,0 +1,137 @@
+# M15 - Cross-asset series registry
+#
+# These are the channels through which the rest of the world reaches Nifty.
+# Roughly half of an Indian index's total price change arrives as an overnight
+# gap, and it arrives through here - which is why this collector runs 24x7 while
+# the market-data feed only runs during Indian hours.
+#
+# `instrument_id` uses the reserved 1000+ range so cross-asset bars can share the
+# Candle schema, the recorder, the archive and the research layer with NSE
+# instruments. They are semantically different but structurally identical, and a
+# parallel storage path for them would be pure duplication.
+#
+# `india_channel` is documentation that earns its place: when a feature built on
+# one of these series turns out to be predictive, the note is what tells you
+# whether that is a mechanism or a coincidence.
+#
+# `provider` is deliberately blank. Fill it when a data vendor is chosen; the
+# synthetic provider covers development until then.
+
+series:
+  - instrument_id: 1001
+    symbol: GIFT_NIFTY
+    name: GIFT Nifty futures
+    category: equity_futures
+    timezone: Asia/Kolkata
+    # Near-continuous: the reason it is the single most useful overnight variable.
+    open_time: "06:30"
+    close_time: "02:45"
+    spans_midnight: true
+    weekdays_only: true
+    typical_lag_seconds: 2
+    india_channel: "Direct. Sets the opening gap when the Indian cash market is shut."
+    provider: ""
+    enabled: false
+
+  - instrument_id: 1002
+    symbol: US_EQ_FUT
+    name: US equity index futures
+    category: equity_futures
+    timezone: America/New_York
+    open_time: "18:00"
+    close_time: "17:00"
+    spans_midnight: true
+    weekdays_only: true
+    typical_lag_seconds: 2
+    india_channel: "Overnight risk sentiment. Strongest single input to the gap model."
+    provider: ""
+    enabled: false
+
+  - instrument_id: 1003
+    symbol: BRENT
+    name: Brent crude
+    category: commodity
+    timezone: Europe/London
+    open_time: "01:00"
+    close_time: "23:00"
+    spans_midnight: false
+    weekdays_only: true
+    typical_lag_seconds: 5
+    india_channel: "Crude to inflation to rates. Asymmetric - spikes transmit faster than drifts."
+    provider: ""
+    enabled: false
+
+  - instrument_id: 1004
+    symbol: GOLD
+    name: Gold spot
+    category: commodity
+    timezone: Europe/London
+    open_time: "01:00"
+    close_time: "23:00"
+    spans_midnight: false
+    weekdays_only: true
+    typical_lag_seconds: 5
+    india_channel: "Risk-off proxy and a large import line item."
+    provider: ""
+    enabled: false
+
+  - instrument_id: 1005
+    symbol: DXY
+    name: US dollar index
+    category: fx
+    timezone: America/New_York
+    open_time: "17:00"
+    close_time: "17:00"
+    spans_midnight: true
+    weekdays_only: true
+    typical_lag_seconds: 2
+    india_channel: "Dollar strength drives foreign flows out of emerging markets."
+    provider: ""
+    enabled: false
+
+  - instrument_id: 1006
+    symbol: USDINR
+    name: USD/INR
+    category: fx
+    timezone: Asia/Kolkata
+    open_time: "09:00"
+    close_time: "17:00"
+    spans_midnight: false
+    weekdays_only: true
+    typical_lag_seconds: 2
+    india_channel: "Bidirectional with Nifty - needs a VAR, not a simple regression."
+    provider: ""
+    enabled: false
+
+  - instrument_id: 1007
+    symbol: US10Y
+    name: US 10-year Treasury yield
+    category: rates
+    timezone: America/New_York
+    open_time: "08:00"
+    close_time: "17:00"
+    spans_midnight: false
+    weekdays_only: true
+    typical_lag_seconds: 10
+    india_channel: "Slower channel, mostly Bank Nifty and mostly the next session."
+    provider: ""
+    enabled: false
+
+  - instrument_id: 1008
+    symbol: ASIA_IDX
+    name: Asian regional index composite
+    category: index
+    timezone: Asia/Tokyo
+    open_time: "09:00"
+    close_time: "15:00"
+    spans_midnight: false
+    weekdays_only: true
+    typical_lag_seconds: 30
+    india_channel: "Useful intraday during the 09:15-12:00 overlap window."
+    provider: ""
+    enabled: false
+
+# The gap forecaster's point-in-time cutoff. Anything published after this is not
+# available to a model predicting today's open, and using it is look-ahead bias
+# of the most flattering kind.
+gap_cutoff_ist: "08:45"

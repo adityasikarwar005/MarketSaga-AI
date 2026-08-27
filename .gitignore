@@ -1,0 +1,61 @@
+# --- secrets and arming -----------------------------------------------------
+# .live-armed is one of the two signals required to place a real order.
+# Committing it would defeat the entire gate. Never remove this line.
+.live-armed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# --- data (never in git; it is measured in gigabytes and is not source) ------
+# `data/*` not `data/` - git never descends into an excluded DIRECTORY, so the
+# negations below would silently never apply.
+data/*
+!data/.gitkeep
+# The discovered holiday calendar is small, reviewable, and worth versioning:
+# it is the difference between 'the feed broke' and 'it was Diwali'.
+!data/reference/
+data/reference/*
+!data/reference/holidays/
+data/reference/holidays/*
+!data/reference/holidays/*.json
+
+# --- build scratch ----------------------------------------------------------
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- environments -----------------------------------------------------------
+.venv/
+venv/
+
+# --- LaTeX scratch ----------------------------------------------------------
+docs/build/
+*.aux
+*.toc
+*.out
+*.log
+*.synctex.gz
+
+# --- editors ----------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# --- notebooks --------------------------------------------------------------
+.ipynb_checkpoints/
+
+# Parquet is derived from data/raw - regenerate with: python tasks.py archive
+data/parquet/
+data/datasets/
+data/.kite_session.json

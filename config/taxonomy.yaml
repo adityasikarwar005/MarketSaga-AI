@@ -1,0 +1,105 @@
+# M27 - Event taxonomy, version 1
+#
+# This file is the backbone of the system: impact priors, features, model
+# conditioning and post-trade attribution are all keyed on these class names.
+#
+# FREEZE THIS BEFORE LABELLING. Re-labelling 3,000 items because a class was
+# renamed is a week you do not get back. Changes after the gold set exists
+# require a version bump and a documented migration.
+#
+# `sev_range` is the plausible band for the class - it constrains, it does not
+# decide. Actual severity comes from the model head and is then empirically
+# recalibrated against realised abnormal moves (see AI-4 in megaplan.md).
+
+version: 1
+
+families:
+  monetary:
+    classes:
+      rate_decision:       {sev_range: [6, 10], scheduled: true,  needs_consensus: true}
+      stance_change:       {sev_range: [5, 9],  scheduled: true}
+      liquidity_measure:   {sev_range: [4, 8]}
+      unscheduled_action:  {sev_range: [8, 10], require_sources: 2}
+      minutes_commentary:  {sev_range: [2, 6],  scheduled: true}
+
+  macro:
+    classes:
+      inflation_release:   {sev_range: [4, 8], scheduled: true, needs_consensus: true}
+      growth_release:      {sev_range: [4, 8], scheduled: true, needs_consensus: true}
+      employment_release:  {sev_range: [3, 8], scheduled: true, needs_consensus: true}
+      trade_balance:       {sev_range: [3, 6], scheduled: true, needs_consensus: true}
+      industrial_output:   {sev_range: [3, 6], scheduled: true, needs_consensus: true}
+      fiscal_data:         {sev_range: [3, 7], scheduled: true}
+
+  geopolitical:
+    classes:
+      military_action:     {sev_range: [6, 10], require_sources: 2}
+      escalation_rhetoric: {sev_range: [3, 7],  require_sources: 2}
+      territorial_incident: {sev_range: [4, 9],  require_sources: 2}
+      sanctions:           {sev_range: [4, 8]}
+      treaty:              {sev_range: [3, 7]}
+      coup:                {sev_range: [5, 10], require_sources: 2}
+
+  trade:
+    classes:
+      tariff_announcement: {sev_range: [4, 9]}
+      export_ban:          {sev_range: [4, 9]}
+      supply_restriction:  {sev_range: [3, 8]}
+
+  energy:
+    classes:
+      production_quota:    {sev_range: [5, 9], scheduled: true}
+      supply_disruption:   {sev_range: [4, 9]}
+      reserve_action:      {sev_range: [3, 7]}
+      infrastructure_hit:  {sev_range: [3, 8]}
+
+  domestic_policy:
+    classes:
+      budget_item:         {sev_range: [3, 9], scheduled: true}
+      regulatory_change:   {sev_range: [3, 8]}
+      sector_reform:       {sev_range: [3, 8]}
+      tax_change:          {sev_range: [4, 9]}
+
+  market_structure:
+    classes:
+      index_rebalance:     {sev_range: [3, 7], scheduled: true}
+      block_deal:          {sev_range: [2, 6]}
+      margin_change:       {sev_range: [3, 7]}
+
+  flows:
+    classes:
+      foreign_flow_reversal: {sev_range: [3, 6]}
+      oi_shift:              {sev_range: [3, 6]}
+      expiry_pinning:        {sev_range: [3, 6], scheduled: true, intraday_only: true}
+
+  disaster:
+    classes:
+      natural_disaster:    {sev_range: [2, 9]}
+      epidemic:            {sev_range: [3, 9]}
+      infrastructure_fail: {sev_range: [2, 7]}
+
+  political:
+    classes:
+      election_result:     {sev_range: [3, 10], scheduled: true}
+      coalition_change:    {sev_range: [4, 9]}
+      major_resignation:   {sev_range: [3, 8]}
+      scandal:             {sev_range: [2, 8]}
+
+  # The noise family is NOT a dumping ground - it is a real class the model must
+  # learn to predict. Most of what arrives is noise, and saying so confidently is
+  # the single most valuable thing the classifier does.
+  noise:
+    classes:
+      opinion:             {sev_range: [0, 2], tradeable: false}
+      analysis:            {sev_range: [0, 2], tradeable: false}
+      repetition:          {sev_range: [0, 1], tradeable: false}
+      speculation:         {sev_range: [0, 2], tradeable: false}
+
+# Applied before any directional signal is allowed out of the event engine.
+# Expect these to reject the large majority of classified events. That is correct.
+gates:
+  min_severity: 5.0
+  min_credibility: 0.75
+  min_novelty: 0.45
+  max_already_priced: 0.6
+  min_effective_sample: 8

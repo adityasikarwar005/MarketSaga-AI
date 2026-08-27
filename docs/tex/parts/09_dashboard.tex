@@ -1,0 +1,626 @@
+% =====================================================================
+\chapter{Dashboard and Product Surface}
+\label{ch:ui}
+% =====================================================================
+
+\section{Design brief}
+
+The dashboard has one job: let a human decide in three seconds whether to act,
+and let the same human audit six weeks later why the machine acted. Everything
+else is decoration.
+
+\begin{center}
+\begin{tikzpicture}[scale=1.0]
+\draw[msblue,thick,rounded corners=3pt] (0,0) rectangle (15.2,9.4);
+\fill[msblue] (0,8.7) rectangle (15.2,9.4);
+\node[white,font=\scriptsize\bfseries,anchor=west] at (0.2,9.05)
+  {MarketSage AI};
+\node[white,font=\scriptsize,anchor=east] at (15.0,9.05)
+  {NIFTY 24{,}812 (-0.34\%)\quad IVR 62\quad REGIME: high-vol/neg-gamma\quad 09:20:45 \quad [PAPER]};
+
+% left column
+\draw[msline,thick,rounded corners=2pt] (0.2,3.3) rectangle (4.0,8.5);
+\node[font=\scriptsize\bfseries,msblue,anchor=north west] at (0.35,8.35) {EVENT STREAM};
+\node[font=\tiny,anchor=north west,text width=3.5cm] at (0.35,7.95)
+ {\textbf{09:20:37 \quad SEV 8.2}\\ Military escalation headline\\
+  cred 0.88 $\cdot$ novelty 0.91 $\cdot$ 2 sources\\
+  prior: $-0.31\%$ / 15m ($n{=}23$)\\[3pt]
+  \textbf{09:14:02 \quad SEV 4.1}\\ Commodity inventory print\\
+  cred 0.90 $\cdot$ novelty 0.44\\
+  prior: $+0.05\%$ / 15m ($n{=}61$)\\[3pt]
+  \textbf{09:02:55 \quad SEV 2.0}\\ Opinion piece --- \emph{suppressed}};
+
+% centre
+\draw[msline,thick,rounded corners=2pt] (4.2,3.3) rectangle (11.0,8.5);
+\node[font=\scriptsize\bfseries,msblue,anchor=north west] at (4.35,8.35)
+ {FORECAST CONE vs IMPLIED MOVE};
+\fill[msblue,opacity=0.10] (6.6,5.0) -- (7.6,5.8) -- (8.8,6.2) -- (10.6,6.6)
+   -- (10.6,3.9) -- (8.8,4.3) -- (7.6,4.6) -- cycle;
+\fill[msblue,opacity=0.20] (6.6,5.0) -- (7.6,5.5) -- (8.8,5.75) -- (10.6,5.95)
+   -- (10.6,4.5) -- (8.8,4.7) -- (7.6,4.85) -- cycle;
+\draw[mscyan,thick,dashed] (6.6,5.0) -- (10.6,4.75);
+\draw[msamber,thick] (10.4,6.3) -- (10.6,6.3);
+\draw[msamber,thick] (10.4,4.2) -- (10.6,4.2);
+\node[font=\tiny,msamber,anchor=east] at (10.35,6.3) {implied};
+\foreach \x/\o/\c/\h/\l in {4.7/4.6/4.9/5.1/4.4, 5.1/4.9/4.8/5.0/4.6,
+  5.5/4.8/5.1/5.3/4.7, 5.9/5.1/5.0/5.25/4.9, 6.3/5.0/5.05/5.2/4.95}{
+  \draw[msblue,thick] (\x,\l)--(\x,\h);
+  \draw[msblue,fill=msblue] (\x-0.08,\o) rectangle (\x+0.08,\c);}
+\node[font=\tiny,anchor=north west,text width=6.4cm] at (4.35,3.95)
+ {$P(\text{down, 15m}) = 0.69$ \; [CI 0.61--0.76] \quad
+  forecast $|move| = 0.89\%$ \; vs implied $0.52\%$ \quad
+  \textbf{edge ratio 1.71} \quad coverage(20d) 91\%};
+
+% right
+\draw[msline,thick,rounded corners=2pt] (11.2,3.3) rectangle (15.0,8.5);
+\node[font=\scriptsize\bfseries,msblue,anchor=north west] at (11.35,8.35) {RECOMMENDATION};
+\node[font=\tiny,anchor=north west,text width=3.5cm] at (11.35,7.95)
+ {\textbf{BEAR PUT SPREAD}\\ BUY 19500 PE @ 78.5\\ SELL 19300 PE\\[2pt]
+  Max profit 121.5 \quad Max loss 78.5\\ Breakeven 19421\\[2pt]
+  Net delta $-0.21$ \quad vega $-1.8$\\ theta $-3.1$\\[2pt]
+  E[P\&L] $+21.4$ \quad P(win) 0.57\\ CVaR$_{5}$ $-71.2$\\[2pt]
+  Size: 2 lots (1.5\% risk)\\ Time stop 09:36\\[3pt]
+  \textbf{WHY}\\ $\cdot$ escalation, sev 8.2\\ $\cdot$ prior $n{=}23$ negative\\
+  $\cdot$ forecast $>$ implied\\ $\cdot$ IVR 62 $\Rightarrow$ spread not naked\\
+  $\cdot$ dealer gamma negative};
+
+% bottom
+\draw[msline,thick,rounded corners=2pt] (0.2,0.2) rectangle (15.0,3.1);
+\node[font=\scriptsize\bfseries,msblue,anchor=north west] at (0.35,2.95) {CALIBRATION \& ATTRIBUTION};
+\node[font=\tiny,anchor=north west,text width=4.6cm] at (0.35,2.5)
+ {Reliability slope 1.04 (target 0.9--1.1)\\ Brier skill +0.061 vs climatology\\
+  90\% interval coverage: 91.2\%\\ Edge realisation slope: 0.83};
+\node[font=\tiny,anchor=north west,text width=4.6cm] at (5.2,2.5)
+ {Trades today 3 $\cdot$ week 14\\ Gross +\rs 6{,}240 / Net +\rs 4{,}905\\
+  Cost drag 21.4\%\\ Profit factor (60d) 1.27};
+\node[font=\tiny,anchor=north west,text width=4.6cm] at (10.1,2.5)
+ {Best class: flows.expiry\_pinning\\ Disabled: geopolitical.rhetoric\\
+  Latency p99 (ingest$\to$signal) 312 ms\\ Feed uptime 99.97\%};
+\end{tikzpicture}
+\end{center}
+
+\section{Panels and their non-negotiable elements}
+
+\begin{longtable}{@{}p{3.4cm}p{11.2cm}@{}}
+\toprule
+\textbf{Panel} & \textbf{Must contain}\\
+\midrule
+Event stream & Severity, credibility, novelty, source count, the historical prior
+\emph{with its sample size}, and suppressed events shown greyed out so the user
+sees what the system chose to ignore.\\
+Forecast cone & The quantile bands, the median as a thin dashed line, the
+implied-move band for comparison, the edge ratio, and the trailing coverage
+statistic so the user knows whether to trust the bands today.\\
+Recommendation & The full structure with both legs, net Greeks, the Monte Carlo
+summary, the sizing rationale, all three exits (target, stop, time), and the
+ordered ``why'' list.\\
+Calibration \& attribution & Always visible, never hidden behind a tab. The
+system's honesty is the product.\\
+Status bar & Mode (PAPER/LIVE/DEGRADED), regime, latency, feed health. Mode must
+be impossible to misread --- a full-width coloured band when live.\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[title={Interaction rules}]
+\begin{itemize}
+\item Nothing flashes or animates except a genuinely new high-severity event.
+\item Every number is hoverable to reveal its computation and its as-of
+timestamp.
+\item Any recommendation can be opened into a full replay: the news item, the
+feature vector, the model versions, the Monte Carlo distribution.
+\item A permanent, unmissable indicator of PAPER versus LIVE mode.
+\end{itemize}
+\end{keybox}
+
+\section{Alerting}
+
+\begin{longtable}{@{}p{3.2cm}p{3.4cm}p{7.8cm}@{}}
+\toprule
+\textbf{Alert} & \textbf{Channel} & \textbf{Rule}\\
+\midrule
+Tradeable signal & Push + sound & Only when all gates pass. Rate-limited to
+avoid alert fatigue.\\
+High-severity event, no trade & Push, silent & ``Something is happening, risk is
+elevated'' --- valuable even without a trade.\\
+Position exit & Push & Target, stop or time stop hit.\\
+Risk breach & Push + SMS & Any L2/L3 kill switch.\\
+System health & Email/chat & Daily digest; immediate only for L3.\\
+Calibration decay & Daily digest & Slow-moving; does not need to interrupt.\\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\chapter{Phase-Gated Execution Roadmap}
+\label{ch:roadmap}
+% =====================================================================
+
+\section{How to read this chapter}
+
+Ten phases. Each has an objective, workstreams, checkpoints, a numeric
+\term{exit gate}, and \term{kill criteria}. You may not begin phase $n+1$ until
+phase $n$'s gate is signed off in writing (a dated entry in
+\texttt{docs/gates.md} with the measured numbers pasted in).
+
+The durations assume one committed developer working roughly 25--30 focused
+hours per week. With a second person on data engineering, compress by around
+30\%. Do not compress by skipping gates.
+
+\begin{center}
+\begin{tikzpicture}[xscale=0.215,yscale=0.62]
+\definecolor{barA}{HTML}{0B3D91}\definecolor{barB}{HTML}{0E7C86}
+\definecolor{barC}{HTML}{B26A00}\definecolor{barD}{HTML}{1B5E20}
+\foreach \p/\s/\e/\y/\col/\lab in {
+  P0/0/2/0/barA/{Foundation \& Legal},
+  P1/2/6/-1/barA/{Market Data Spine},
+  P2/5/10/-2/barB/{News \& PIT Event Store},
+  P3/10/14/-3/barB/{Event Classification},
+  P4/13/18/-4/barC/{Impact Library + Gap Forecast},
+  P5/17/24/-5/barC/{Features + Baseline Models},
+  P6/23/27/-6/barC/{Candle Projection (fan)},
+  P7/26/33/-7/barD/{Options Engine + L2 Simulator},
+  P8/30/45/-8/barD/{Dashboard + Live Paper (3 mo)},
+  P9/45/56/-9/barD/{Live Micro-Capital \& Scale}}{
+  \fill[\col,rounded corners=1.5pt] (\s,\y-0.28) rectangle (\e,\y+0.28);
+  \node[font=\tiny\bfseries,white,anchor=west] at (\s+0.4,\y) {\p};
+  \node[font=\tiny,anchor=west,black] at (\e+0.6,\y) {\lab};
+}
+\draw[msgrey,->] (0,-9.9) -- (57,-9.9);
+\foreach \w in {0,8,16,24,32,40,48,56}{
+  \draw[msgrey] (\w,-9.8)--(\w,-10.05);
+  \node[font=\tiny,anchor=north] at (\w,-10.05) {W\w};}
+\draw[msred,dashed,thick] (45,0.5) -- (45,-9.9);
+\node[font=\tiny,msred,anchor=south,rotate=90] at (45.6,-6) {first real money};
+\end{tikzpicture}
+\end{center}
+
+% ---------------------------------------------------------------------
+\section{Phase 0 --- Foundation and Legal (Weeks 1--2)}
+
+\textbf{Objective.} Make it impossible to build the wrong thing, and start the
+data clock.
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+0.1 & Repository and environment & Monorepo scaffolded per Chapter~\ref{ch:repo},
+Docker Compose brings up Postgres/TimescaleDB, Redis and a service skeleton with
+one command. Pre-commit hooks including a secret scanner.\\
+0.2 & Broker and data vendor decision & Written comparison of at least three
+brokers on: WebSocket instrument limits, tick frequency, historical data depth,
+option chain access, algo registration process, order API reliability. Decision
+recorded with reasons.\\
+0.3 & Compliance memo & One page: which regulations apply to personal automated
+trading through the chosen broker, what data may be stored, what may be shown to
+others, and what changes if a second user is added. \textbf{Written before
+architecture is frozen.}\\
+0.4 & Recorder running & A minimal always-on process writing ticks, option chain
+snapshots and news headlines with timestamps to disk. Crude is fine. It runs
+tonight.\\
+0.5 & Instrument master & Canonical instrument table, expiry calendar, holiday
+calendar, lot sizes, tick sizes --- all loaded and versioned.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G0}]
+The recorder has produced 5 consecutive complete trading days of ticks, chain
+snapshots and news with zero unexplained gaps, and the compliance memo is
+signed. \textbf{Every day this gate slips is a day of irrecoverable data.}
+\end{gatebox}
+
+% ---------------------------------------------------------------------
+\section{Phase 1 --- Market Data Spine (Weeks 3--6)}
+
+\textbf{Objective.} A correct, replayable, queryable market history.
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+1.1 & Tick ingestion service & Reconnect logic, sequence-gap detection,
+backpressure handling, heartbeat monitoring. Survives a forced disconnect
+mid-session without data loss.\\
+1.2 & Candle builder & 1/5/15-minute candles per Chapter~5 rules, including
+synthetic gap candles and session tagging.\\
+1.3 & Option chain snapshotter & Both indices, near two expiries, full strike
+range, at 1--5 second cadence with completeness metrics.\\
+1.4 & TimescaleDB schema + compression + retention & Hypertables, continuous
+aggregates, compression policy, and a tested restore from backup.\\
+1.5 & Parquet archival + DuckDB research layer & A notebook can scan a month of
+candles in under a second.\\
+1.6 & Replay engine & Deterministic replay of a recorded day through the bus.
+Byte-identical candle output on repeat runs (automated test).\\
+1.7 & Data quality gates & The checks in Chapter~5 running nightly with alerts.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G1}]
+(i)~Replay a chosen historical day and reproduce candles byte-identically twice.
+(ii)~20 consecutive sessions captured with $\ge$ 99.5\% expected candles present
+and option chain completeness $\ge$ 95\%. (iii)~A full restore from backup
+succeeds on a clean machine.
+\end{gatebox}
+
+\begin{warnbox}[title={Kill criteria for P1}]
+If the chosen broker feed cannot deliver adequate option chain coverage, stop and
+change vendor now. Discovering this at Phase~7 wastes four months.
+\end{warnbox}
+
+% ---------------------------------------------------------------------
+\section{Phase 2 --- News Ingestion and Point-in-Time Event Store (Weeks 6--10)}
+
+\textbf{Objective.} Build the asset nobody else has: a timestamp-honest archive
+of what was knowable when.
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+2.1 & Collector framework & Pluggable per-source collectors, per-source rate
+limits, retries with backoff, health heartbeats, and a source registry with
+credibility weights.\\
+2.2 & Publish-time resolution & Extract the true publication timestamp; where
+impossible, set \texttt{ts\_uncertain} and record the estimation method.
+Measured accuracy against a manually verified sample.\\
+2.3 & Deduplication & Exact hash, SimHash and embedding ANN with cluster heads.
+Measured duplicate rate.\\
+2.4 & Economic calendar with consensus & Scheduled events with expected values
+loaded ahead of time; surprise computable at release.\\
+2.5 & Historical backfill & As much archive as licensing permits, clearly
+separated from the live-collected archive because their timestamp quality
+differs.\\
+2.6 & Storage and search & PostgreSQL plus vector index; ``show me every event of
+class X in the last two years'' returns in seconds.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G2}]
+30 consecutive days collected. Duplicate rate below 3\%. On a manually verified
+sample of 200 items, the publish timestamp is within 5 seconds of truth for at
+least 90\% of items. A point-in-time query (``what did we know at
+2026-07-14 11:03:00?'') returns a correct, reproducible set.
+\end{gatebox}
+
+% ---------------------------------------------------------------------
+\section{Phase 3 --- Event Classification (Weeks 10--14)}
+
+\textbf{Objective.} Turn text into structured, scored events.
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+3.1 & Taxonomy v1 frozen & Written definitions with positive and negative
+examples for every class, including the noise class.\\
+3.2 & Gold labelled set & 2{,}000--3{,}000 items labelled, two annotators on at
+least 20\%, inter-annotator agreement measured and above an agreed threshold.
+Use an LLM to pre-label and humans to correct --- roughly a five-fold speed-up.\\
+3.3 & Classifier trained & Fine-tuned encoder, multi-label head, severity
+regression head, temperature-calibrated confidence.\\
+3.4 & Entity and geo extraction & Linked to the canonical knowledge graph, not
+free text.\\
+3.5 & Severity empirical recalibration & Section~\ref{sec:severity} step 3
+completed against realised abnormal moves.\\
+3.6 & Novelty and confirmation logic & Implemented with the fake-news defence
+tests from Chapter~\ref{ch:event}.\\
+3.7 & Latency optimisation & Quantised or ONNX-exported; p95 under 120 ms for
+the tier-2 model.\\
+3.8 & Two-tier funnel wired into the bus & End-to-end from raw item to
+\texttt{event.classified}.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G3}]
+Macro-F1 $\ge$ 0.80 on a temporally held-out test set. Recall on
+severity-$\ge$7 events $\ge$ 0.95. False-positive rate on the noise class
+$\le$ 2\%. Tier-2 p95 latency $\le$ 120 ms. The AP-hack injection test produces
+no directional signal. Severity correlates with realised absolute abnormal
+return with Spearman $\rho \ge 0.35$.
+\end{gatebox}
+
+\begin{warnbox}[title={The severity correlation is the real gate}]
+A classifier can score beautifully on labels and be useless for trading. If
+severity does not correlate with realised market movement, the taxonomy or the
+labelling rubric is wrong --- fix that before proceeding. This is the most
+common silent failure in the entire project.
+\end{warnbox}
+
+% ---------------------------------------------------------------------
+\section{Phase 4 --- Impact Library and the Gap Forecaster (Weeks 13--18)}
+
+\textbf{Objective.} Learn what events historically did, and ship the first
+genuinely useful product.
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+4.1 & Abnormal-return engine & Time-of-day and regime normalised abnormal
+returns with matched control sampling.\\
+4.2 & Event study over the full archive & Every historical event scored across
+all horizons; results stored and queryable.\\
+4.3 & Hierarchical Bayesian posteriors & Per class and family, with shrinkage,
+credible intervals and effective sample sizes.\\
+4.4 & Volatility and implied-volatility response library & The
+$\sigma_{\text{post}}/\sigma_{\text{pre}}$ and $\Delta\sigma_{IV}$ distributions
+per class.\\
+4.5 & Cross-asset transfer coefficients & Estimated lead-lag relationships with
+confidence intervals.\\
+4.6 & \textbf{Overnight gap forecaster} & A model predicting the next session's
+opening gap from overnight global events and cross-asset moves --- the first
+component that produces standalone value with no latency requirements.\\
+4.7 & Morning briefing product & An automated pre-market note: overnight events,
+gap forecast distribution, key levels, scheduled events today.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G4}]
+At least 15 event classes have posteriors with $n_{\text{eff}} \ge 8$ and
+credible intervals excluding zero for at least 5 of them. The gap forecaster
+beats a naive ``gap $=$ overnight global futures move'' baseline on out-of-sample
+CRPS by $\ge$ 10\%. The morning briefing has been generated automatically for 20
+consecutive sessions.
+\end{gatebox}
+
+\begin{keybox}[title={Why the gap forecaster is placed here}]
+It is the fastest path from ``interesting research'' to ``a thing that is useful
+every single morning''. It needs no low-latency infrastructure, no options
+engine and no live execution. Shipping it at week 18 rather than at week 45
+sustains motivation and produces real feedback --- and, being a distributional
+forecast scored by CRPS, it validates the entire probabilistic approach cheaply.
+\end{keybox}
+
+% ---------------------------------------------------------------------
+\section{Phase 5 --- Feature Store and Baseline Prediction (Weeks 17--24)}
+
+\textbf{Objective.} Find out whether an intraday edge exists at all.
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+5.1 & Feature framework & The one-definition/two-materialisation pattern with an
+automated offline--online parity test in CI.\\
+5.2 & Feature groups A, C, E, F implemented & Group B added only if the feed
+supports it.\\
+5.3 & Leakage linter & Automated check of every feature's dependency timestamps
+against the decision time. Fails the build on violation.\\
+5.4 & Triple-barrier labelling & With volatility-scaled barriers, sample
+uniqueness weights and event grouping.\\
+5.5 & Purged/embargoed CV harness & Plus combinatorial purged CV producing a
+Sharpe \emph{distribution}.\\
+5.6 & M0 rules baseline & The bar every model must clear.\\
+5.7 & M1 LightGBM direction, M5 volatility, M8 regime & Trained, tuned, SHAP
+analysed.\\
+5.8 & Calibration layer & Isotonic fit plus reliability diagrams.\\
+5.9 & M7 meta-labeller & Trained on M1 outputs.\\
+5.10 & \textbf{Historical option chain purchased} & The hard dependency for
+Phase~7. Order it at the start of this phase; delivery and cleaning take weeks.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G5 --- the decision gate of the whole project}]
+On walk-forward out-of-sample data, restricted to event-conditioned samples and
+with a 3-second decision delay applied:
+\begin{itemize}
+\item M1 beats M0 on log loss by a statistically significant margin
+(bootstrap CI excludes zero).
+\item Calibrated: reliability slope in $[0.85, 1.15]$, Brier skill score
+$>$ 0.02 versus climatology.
+\item Directional AUC $\ge$ 0.55 on high-severity event samples.
+\item M5 volatility forecast beats a HAR-RV baseline on QLIKE.
+\item Edge realisation slope $>$ 0.5 in the L1 evaluation.
+\end{itemize}
+\end{gatebox}
+
+\begin{warnbox}[title={Kill criteria for P5 --- read this twice}]
+If, after honest purged cross-validation with the decision delay applied, AUC
+sits at 0.50--0.52 and calibration is flat, \textbf{there is no intraday
+directional edge in your current feature set}. Do not proceed to build an
+options engine on top of a coin flip. Instead: (a)~pivot to
+\emph{volatility-only} strategies, where the gate is far easier to pass;
+(b)~pivot to the overnight gap product from Phase~4, which already works;
+(c)~invest in better data (order book depth, faster sources) and retry once.
+Three failed attempts at G5 means the honest answer is that this specific edge
+does not exist at your data tier --- and knowing that at week 24 instead of week
+80 is a success, not a failure.
+\end{warnbox}
+
+% ---------------------------------------------------------------------
+\section{Phase 6 --- Distributional Candle Projection (Weeks 23--27)}
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+6.1 & M2 quantile models & Pinball-loss heads at each horizon.\\
+6.2 & Conformal wrapper & Split conformal intervals with verified coverage.\\
+6.3 & Path sampler & Volatility-clustering simulator calibrated so terminal
+quantiles match M2.\\
+6.4 & Fan-chart renderer & Per-minute quantile candles plus the implied-move
+overlay.\\
+6.5 & Projection scoring & Pinball, CRPS, PIT and coverage tracked daily.\\
+6.6 & M3 sequence model (optional) & Only if it beats M1 in the ensemble; drop it
+without sentiment if it does not.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G6}]
+Out-of-sample 90\% interval coverage within $90\% \pm 3\%$; PIT histogram passes
+a uniformity test; CRPS beats both a random-walk-with-GARCH baseline and the
+option-implied distribution by $\ge$ 8\% relative. Rendering latency under
+120 ms for 5000 paths.
+\end{gatebox}
+
+% ---------------------------------------------------------------------
+\section{Phase 7 --- Options Engine and Simulator (Weeks 26--33)}
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+7.1 & IV surface fitting & Arbitrage-free parametric fit per expiry with quality
+metrics and stale-quote filtering.\\
+7.2 & Greeks engine & Validated against an independent reference implementation
+to within tolerance.\\
+7.3 & M6 implied-volatility change model & Trained and calibrated.\\
+7.4 & Structure enumerator & With liquidity eligibility constraints.\\
+7.5 & Monte Carlo P\&L engine & Vectorised, under 90 ms p99 for the full
+candidate set.\\
+7.6 & Cost model & Full statutory and brokerage stack, point-in-time rates, plus
+an empirical slippage model.\\
+7.7 & Sizing and risk gate & Fractional Kelly with all modifiers and every limit
+from Chapter~\ref{ch:risk}.\\
+7.8 & L2 event-driven simulator & Production code path, injected latency,
+realistic fills, conservative tie-breaking.\\
+7.9 & Stress-test suite & All ten scenarios from Chapter~\ref{ch:risk} as
+automated replay tests.\\
+7.10 & \textbf{Locked-holdout evaluation} & The single permitted evaluation
+against the untouched 3-month holdout.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G7}]
+On the L2 simulator over at least 12 months including the locked holdout, and
+after full costs and a 3-second delay: profit factor $\ge$ 1.2; positive
+expectancy in at least 3 of 4 quarters; max drawdown $\le$ 12\% of notional
+risk capital; deflated Sharpe ratio $>$ 0; and the strategy survives all ten
+stress scenarios with the specified behaviour. Every recommendation carries a
+complete explanation record.
+\end{gatebox}
+
+% ---------------------------------------------------------------------
+\section{Phase 8 --- Dashboard and Three Months of Live Paper Trading (Weeks 30--45)}
+
+\textbf{Objective.} Prove it in the wild, with no money at risk. This phase
+cannot be compressed --- it is bounded by calendar time, not by effort.
+
+\begin{longtable}{@{}p{1.4cm}p{6.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{CP} & \textbf{Checkpoint} & \textbf{Definition of done}\\
+\midrule
+8.1 & Dashboard v1 & All five panels from Chapter~\ref{ch:ui}, WebSocket live,
+with the PAPER/LIVE indicator.\\
+8.2 & Alerting & Push notifications with rate limiting.\\
+8.3 & Paper ledger & Every signal recorded with simulated fills at live prices,
+plus outcome resolution at horizon.\\
+8.4 & Daily operating rhythm automated & Preflight, session, post-session,
+nightly and weekend jobs all running unattended.\\
+8.5 & Observability & Trace propagation, dashboards, alarms, error budget.\\
+8.6 & \textbf{60 trading sessions of live paper} & Unattended, with an
+availability target of 99\% during market hours.\\
+8.7 & Weekly attribution reviews & 12 written reviews with actions taken.\\
+8.8 & Class-level kill policy active & Underperforming event classes
+automatically disabled.\\
+\bottomrule
+\end{longtable}
+
+\begin{gatebox}[title={Gate G8 --- the go-live gate}]
+Over $\ge$ 60 sessions and $\ge$ 150 paper trades:
+\begin{itemize}
+\item Positive net expectancy after full modelled costs.
+\item Profit factor $\ge$ 1.15.
+\item Max drawdown $\le$ 10\% of notional risk capital.
+\item Reliability slope in $[0.85,1.15]$ on live data.
+\item Live results within one standard error of the L2 simulator's prediction
+for the same period (\textbf{if live and simulated diverge, the simulator is
+wrong and everything built on it is suspect}).
+\item Zero unhandled exceptions in the trading path; every kill switch exercised
+at least once in a drill.
+\item Broker algo registration complete; compliance memo updated.
+\end{itemize}
+\end{gatebox}
+
+% ---------------------------------------------------------------------
+\section{Phase 9 --- Live Micro-Capital and Scaling (Week 45 onward)}
+
+\begin{longtable}{@{}p{2.6cm}p{3.4cm}p{8.6cm}@{}}
+\toprule
+\textbf{Rung} & \textbf{Capital} & \textbf{Promotion criteria to the next rung}\\
+\midrule
+R1 & Minimum viable (1 lot, smallest instrument) & 20 sessions, live P\&L within
+one standard error of paper P\&L for the same signals, slippage within the
+modelled band.\\
+R2 & 2x R1 & 40 sessions, profit factor $\ge$ 1.15, no L3 kill events.\\
+R3 & 4x R1 & 60 sessions, Sharpe $>$ 1 annualised, drawdown within limits.\\
+R4 & 8x R1 & Two consecutive profitable quarters; slippage still within model.\\
+\midrule
+\multicolumn{3}{@{}p{14.6cm}@{}}{\textbf{Demotion rule:} any breach of the weekly
+loss limit, or live results deviating from paper by more than two standard
+errors, drops the ladder by one rung immediately and triggers a written review.
+Scaling up is slow; scaling down is instant.}\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[title={The paper-versus-live divergence test}]
+Run the paper engine \emph{alongside} the live engine forever, on identical
+signals. The difference between paper and live P\&L is your true execution cost.
+If that gap widens, the model has not degraded --- your fills have. These are
+different problems with different fixes, and without running both you cannot
+tell them apart.
+\end{keybox}
+
+\section{Phase summary table}
+
+\begin{longtable}{@{}p{1.0cm}p{4.0cm}p{2.0cm}p{7.4cm}@{}}
+\toprule
+\textbf{Ph} & \textbf{Name} & \textbf{Weeks} & \textbf{Single most important
+output}\\
+\midrule
+P0 & Foundation and Legal & 1--2 & The recorder is running tonight.\\
+P1 & Market Data Spine & 3--6 & Deterministic replay.\\
+P2 & News and PIT Event Store & 6--10 & Timestamp-honest archive.\\
+P3 & Event Classification & 10--14 & Severity that correlates with real moves.\\
+P4 & Impact Library + Gap Forecaster & 13--18 & Conditional base rates, and the
+first shipped product.\\
+P5 & Features + Baseline Models & 17--24 & The honest answer to ``is there an
+edge?''\\
+P6 & Candle Projection & 23--27 & Calibrated forecast cones.\\
+P7 & Options Engine + Simulator & 26--33 & Trades whose expected value is
+positive after costs.\\
+P8 & Dashboard + Live Paper & 30--45 & 60 sessions of unattended live evidence.\\
+P9 & Live Capital & 45+ & A capital ladder that only climbs on evidence.\\
+\bottomrule
+\end{longtable}
+
+\section{The first fourteen days, concretely}
+
+\begin{longtable}{@{}p{1.6cm}p{13.0cm}@{}}
+\toprule
+\textbf{Day} & \textbf{Task}\\
+\midrule
+1 & Create the repository and the Docker Compose stack (Postgres/TimescaleDB,
+Redis). Get \texttt{docker compose up} working. Add pre-commit with a secret
+scanner.\\
+2 & Open the broker account with API access; obtain and store credentials in a
+secrets manager. Read the API documentation end to end and write down the
+instrument subscription limit and tick frequency.\\
+3 & Write the tick recorder. Subscribe to the two index spots and futures. Write
+raw messages to disk as newline-delimited JSON. Ugly is fine.\\
+4 & Write the option chain snapshotter. Both indices, near two expiries. Run it
+for a full session and measure completeness.\\
+5 & Write two news collectors (one wire RSS, one official/central-bank page).
+Store raw with three timestamps.\\
+6 & Build the instrument master, expiry calendar and holiday calendar. Load them.\\
+7 & Review the week: verify that five days of data exist and are complete. Fix
+gaps. \textbf{This recorder never stops again.}\\
+8 & TimescaleDB schema; a loader from raw files into hypertables.\\
+9 & The candle builder with the six correctness rules; write the determinism
+test.\\
+10 & Parquet archival job and a DuckDB notebook; plot a day of Nifty from
+Parquet.\\
+11 & Data quality checks: candle counts, tick gaps, chain completeness. Wire an
+alert.\\
+12 & The compliance memo. Talk to the broker about algo registration
+requirements. Write it down.\\
+13 & The broker/vendor comparison document; commit to a decision.\\
+14 & Gate G0 review. Write the numbers into \texttt{docs/gates.md}. Only then
+start Phase~1 properly.\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[title={What not to do in the first fourteen days}]
+Do not train a model. Do not build a dashboard. Do not integrate an LLM. Do not
+optimise latency. Every one of those is more fun than building a recorder, and
+every one of them is worthless without the data the recorder produces.
+\end{warnbox}

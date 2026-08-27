@@ -1,0 +1,51 @@
+# M00 - local infrastructure.
+#
+# Two services, deliberately. Kubernetes before Tier T5 is pure overhead
+# (blueprint Ch.4). One solid machine with fast disk beats a cluster here.
+#
+#   docker compose up -d      bring it up
+#   python tasks.py test      run the suite (infra tests skip if this is down)
+
+services:
+  timescale:
+    image: timescale/timescaledb:latest-pg16
+    container_name: marketsage-timescale
+    environment:
+      POSTGRES_USER: marketsage
+      POSTGRES_PASSWORD: marketsage_dev   # dev only; live uses a secrets manager
+      POSTGRES_DB: marketsage
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketsage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    shm_size: 1gb
+
+  redis:
+    image: redis:7-alpine
+    container_name: marketsage-redis
+    ports:
+      - "6379:6379"
+    # appendonly: the bus is not just a cache. A restart must not lose
+    # unacknowledged messages, or replay guarantees are meaningless.
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 2gb
+      --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  timescale_data:
+  redis_data:

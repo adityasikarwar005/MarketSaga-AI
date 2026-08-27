@@ -1,0 +1,381 @@
+% =====================================================================
+\chapter{Candle Projection: Honest Ghost Candles}
+\label{ch:candles}
+% =====================================================================
+
+\section{The redesign}
+
+The original design draws a single predicted OHLC sequence. That is
+scientifically indefensible and, worse, psychologically dangerous: a crisp
+predicted candle invites the user to bet as if it were certain.
+
+The redesign keeps the visual drama and adds truth: draw a \term{probability
+cone} made of quantile candles, where the body and wick widths encode
+uncertainty and the colour intensity encodes directional confidence.
+
+\begin{center}
+\begin{tikzpicture}[scale=0.95]
+\draw[msgrey,->] (0,0) -- (10.4,0) node[right,font=\scriptsize]{time};
+\draw[msgrey,->] (0,0) -- (0,4.4) node[above,font=\scriptsize]{price};
+\node[font=\scriptsize,anchor=north] at (2.5,-0.15) {realised};
+\node[font=\scriptsize,anchor=north] at (7.4,-0.15) {projected};
+\draw[dashed,msgrey] (5.0,0) -- (5.0,4.3) node[above,font=\scriptsize,black]{now};
+
+% realised candles
+\foreach \x/\o/\c/\h/\l in {0.6/1.6/2.0/2.2/1.4, 1.4/2.0/1.8/2.15/1.6,
+  2.2/1.8/2.4/2.55/1.7, 3.0/2.4/2.3/2.6/2.15, 3.8/2.3/2.7/2.85/2.2,
+  4.5/2.7/2.6/2.9/2.5}{
+  \draw[msblue,thick] (\x,\l) -- (\x,\h);
+  \draw[msblue,fill=msblue] (\x-0.13,\o) rectangle (\x+0.13,\c);
+}
+% cone bands
+\fill[msblue,opacity=0.10] (5.0,2.6) -- (6.0,3.15) -- (7.0,3.5) -- (8.0,3.75) -- (9.0,3.95) -- (10.0,4.15)
+  -- (10.0,0.75) -- (9.0,1.0) -- (8.0,1.3) -- (7.0,1.6) -- (6.0,2.0) -- cycle;
+\fill[msblue,opacity=0.18] (5.0,2.6) -- (6.0,2.92) -- (7.0,3.1) -- (8.0,3.25) -- (9.0,3.36) -- (10.0,3.46)
+  -- (10.0,1.5) -- (9.0,1.66) -- (8.0,1.82) -- (7.0,2.0) -- (6.0,2.24) -- cycle;
+\draw[mscyan,very thick,dashed] (5.0,2.6) -- (6.0,2.56) -- (7.0,2.50) -- (8.0,2.44) -- (9.0,2.39) -- (10.0,2.34);
+\node[font=\scriptsize,anchor=west] at (10.05,4.15) {$q_{95}$};
+\node[font=\scriptsize,anchor=west] at (10.05,3.46) {$q_{75}$};
+\node[font=\scriptsize,anchor=west] at (10.05,2.34) {median};
+\node[font=\scriptsize,anchor=west] at (10.05,1.50) {$q_{25}$};
+\node[font=\scriptsize,anchor=west] at (10.05,0.75) {$q_{05}$};
+% implied move markers
+\draw[msamber,thick] (9.6,3.9) -- (10.0,3.9);
+\draw[msamber,thick] (9.6,1.1) -- (10.0,1.1);
+\node[font=\scriptsize,msamber,anchor=east] at (9.55,3.9) {implied move band};
+\end{tikzpicture}
+\end{center}
+
+\section{How the cone is produced}
+
+\begin{enumerate}
+\item \term{Volatility forecast} $\hat\sigma_h$ from M5 (HAR-RV plus boosted
+residual), conditioned on the event.
+\item \term{Drift forecast} $\hat\mu_h$ from the calibrated direction ensemble
+converted to an expected return: $\hat\mu_h = (2p_{\text{up}}-1)\cdot
+\mathbb{E}[|r_h|]$, damped by the meta-labeller's confidence.
+\item \term{Direct quantile heads} from M2 give $q_\alpha(r_h)$ for
+$\alpha \in \{0.05,0.25,0.5,0.75,0.95\}$ at each horizon.
+\item \term{Path sampling} for the visual: draw $N=5000$ paths from a
+volatility-clustering process (a student-$t$ innovation GARCH-style simulator, or
+a conditional generative model trained on real intraday paths) calibrated so the
+terminal distribution matches the quantile heads. Then compute the per-minute
+empirical quantiles of open, high, low and close.
+\item \term{Rendering}: each projected minute is drawn as a semi-transparent
+candle whose body spans $[q_{25}, q_{75}]$ of the close and whose wick spans
+$[q_{05}, q_{95}]$, tinted by $P(\text{up})$.
+\item \term{Overlay the implied move} from the option chain on the same axis.
+When the cone is narrower than the implied move band, options are expensive
+relative to our forecast --- that is a sell-volatility setup, and it is
+immediately visible.
+\end{enumerate}
+
+\begin{keybox}[title={The killer visual}]
+Two bands on one chart: \emph{what we forecast} versus \emph{what the market has
+priced}. The gap between them is the trade. No competing retail product shows
+this, and it makes the product's thesis legible in one glance.
+\end{keybox}
+
+\section{Scoring the projection honestly}
+
+\begin{longtable}{@{}p{4.0cm}p{4.6cm}p{5.8cm}@{}}
+\toprule
+\textbf{Metric} & \textbf{Definition} & \textbf{Target}\\
+\midrule
+Pinball loss & Quantile loss averaged over $\alpha$ & Must beat a random-walk
+baseline with GARCH volatility by at least 8\% relative.\\
+CRPS & Continuous ranked probability score & Lower than both random walk and the
+implied-volatility-derived distribution.\\
+PIT histogram & Probability integral transform of realised outcomes & Should be
+uniform. Humps at the edges mean intervals are too narrow.\\
+Empirical coverage & Fraction of outcomes inside $[q_{05},q_{95}]$ & Within
+$90\% \pm 3\%$.\\
+Interval width efficiency & Mean width given coverage & Narrower is better only
+if coverage holds.\\
+Directional deviation & $|\text{realised} - \text{median}|$ & Reported, but
+never as the headline metric.\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[title={Reject the temptation}]
+Do not display a single crisp predicted candle even if users ask for it. Instead
+display the median path as a thin dashed line inside the cone. The moment the
+product implies certainty, its users will size themselves into ruin and blame
+the product --- correctly.
+\end{warnbox}
+
+% =====================================================================
+\chapter{Options Recommendation Engine}
+\label{ch:options}
+% =====================================================================
+
+\section{From a price forecast to a trade}
+
+A forecast distribution over the underlying is not a trade. The engine performs
+five steps.
+
+\begin{center}
+\begin{tikzpicture}[node distance=4mm and 4mm,blk/.append style={text width=2.3cm}]
+\node[blk] (a) {1. Fit IV surface\\ SVI / SABR};
+\node[blk,right=of a] (b) {2. Forecast\\ $\Delta\sigma_{IV}$ (M6)};
+\node[blk,right=of b] (c) {3. Enumerate\\ candidate structures};
+\node[blk,right=of c] (d) {4. Monte Carlo\\ P\&L distribution};
+\node[blk,right=of d] (e) {5. Rank, size,\\ risk gate};
+\draw[ar](a)--(b);\draw[ar](b)--(c);\draw[ar](c)--(d);\draw[ar](d)--(e);
+\end{tikzpicture}
+\end{center}
+
+\section{Step 1 --- The implied volatility surface}
+
+Raw per-strike implied volatilities from a live chain are noisy and occasionally
+arbitrageable due to stale quotes. Fit a smooth, arbitrage-free surface:
+
+\begin{itemize}
+\item Compute implied volatility from mid prices only (never last traded price
+--- a stale last price generates a fake signal), using Black-76 on futures or
+Black--Scholes on spot with the appropriate forward.
+\item Filter: bid $>0$, spread below a threshold, open interest above a
+threshold, and $|\delta| \in [0.05, 0.95]$.
+\item Fit a parametric slice per expiry (SVI is the standard choice), enforcing
+no calendar and no butterfly arbitrage.
+\item Store surface parameters, not just points. Slope, curvature and level
+become features; the fitted surface prices any strike, including illiquid ones.
+\end{itemize}
+
+\section{Step 2 --- Forecasting the volatility change}
+
+\begin{keybox}[title={The most valuable model in the system}]
+$\Delta\sigma_{IV}$ over the next 15--30 minutes is more forecastable than
+direction and it dominates short-dated option P\&L. Typical patterns to learn:
+\begin{itemize}
+\item Implied volatility \emph{expands} ahead of a scheduled event and
+\emph{collapses} within minutes of the release --- regardless of direction.
+\item After an unscheduled shock, implied volatility overshoots and mean-reverts
+with a half-life measured in tens of minutes.
+\item On expiry day, implied volatility decays mechanically and violently.
+\item Elevated implied volatility rank means buying premium has a strong
+headwind.
+\end{itemize}
+\end{keybox}
+
+\section{Step 3 --- Candidate structures}
+
+\begin{longtable}{@{}p{3.2cm}p{3.6cm}p{3.4cm}p{3.8cm}@{}}
+\toprule
+\textbf{Structure} & \textbf{Use when} & \textbf{Main risk} & \textbf{Notes}\\
+\midrule
+Long ATM/OTM call or put & Strong direction, forecast move well above implied,
+implied volatility rank low & Vega and theta & Simple, highest gamma, but the
+most exposed to volatility crush.\\
+Vertical debit spread & Direction good, implied volatility elevated & Capped
+upside & \textbf{Default directional structure post-news.} The short leg
+neutralises much of the vega.\\
+Long straddle / strangle & Big move expected, direction unclear, before a
+scheduled event & Volatility crush if the move disappoints & Only when forecast
+move exceeds implied move by a wide margin.\\
+Short strangle with wings (iron condor) & Forecast move well below implied, calm
+regime & Tail risk & Defined risk only. Never naked short options.\\
+Calendar spread & Term structure dislocated & Complex & Advanced; phase 3 of the
+options engine.\\
+Ratio / broken-wing & Skew dislocation & Asymmetric & Advanced.\\
+\textbf{No trade} & Forecast within noise of implied & --- & Must be the most
+frequently selected option.\\
+\bottomrule
+\end{longtable}
+
+Strike selection is constrained, not free: only strikes with adequate open
+interest, adequate volume in the last five minutes, and a bid-ask spread below a
+fraction of the option price are eligible. A theoretically optimal strike that
+cannot be exited is a trap.
+
+\section{Step 4 --- Monte Carlo P\&L distribution}
+
+For each candidate structure:
+
+\begin{enumerate}
+\item Take the $N$ sampled underlying paths from Chapter~\ref{ch:candles}.
+\item For each path and each future minute, evolve the implied volatility surface
+using the M6 forecast plus a stochastic component (correlated negatively with
+the underlying for equity indices --- the leverage effect).
+\item Reprice the structure along the path, including the passage of time.
+\item Apply the exit rule (target, stop, time stop) to get a realised P\&L per
+path.
+\item Subtract full transaction costs on both legs, entry and exit, including
+modelled slippage as a function of the spread and size.
+\end{enumerate}
+
+The output is a P\&L distribution, from which we extract:
+
+\[
+\mathbb{E}[\text{P\&L}],\quad
+P(\text{profit}),\quad
+\text{CVaR}_{5\%},\quad
+\frac{\mathbb{E}[\text{P\&L}]}{\text{std}},\quad
+\text{max drawdown along the path}.
+\]
+
+\begin{keybox}[title={Ranking objective}]
+Rank by risk-adjusted expected value after costs, penalised by illiquidity:
+\[
+\text{Score} = \frac{\mathbb{E}[\text{P\&L}] - \lambda\,\text{CVaR}_{5\%}}
+{\text{capital at risk}} \cdot \underbrace{\Big(1 - \tfrac{\text{spread}}{2\,\text{mid}}\Big)^2}_{\text{liquidity penalty}}
+\]
+Emit a recommendation only if $\mathbb{E}[\text{P\&L}] > 0$ after costs
+\emph{and} the score exceeds a minimum threshold \emph{and} the meta-labeller
+approves.
+\end{keybox}
+
+\section{Step 5 --- Position sizing}
+
+Never size by intuition or by a fixed lot count. Use fractional Kelly with a hard
+cap:
+
+\[
+f^{*} = \frac{p\,b - (1-p)}{b}, \qquad
+f_{\text{used}} = \min\!\Big(0.25\,f^{*},\; f_{\max}\Big)
+\]
+
+where $p$ is the calibrated win probability, $b$ the payoff ratio from the Monte
+Carlo, $0.25$ is the fractional-Kelly discount (full Kelly is far too aggressive
+when $p$ is estimated), and $f_{\max}$ is a hard per-trade cap (start at 1--2\%
+of capital risked).
+
+\begin{longtable}{@{}p{4.8cm}p{9.8cm}@{}}
+\toprule
+\textbf{Additional size modifier} & \textbf{Effect}\\
+\midrule
+Posterior uncertainty of the impact prior & Size scales with
+$1/\sqrt{1 + \text{var}}$; small sample sizes shrink the position.\\
+Regime & Reduce size in high-volatility or low-liquidity regimes.\\
+Time of day & Reduce size in the first 10 and last 15 minutes.\\
+Consecutive losses & Reduce size after a losing streak (anti-martingale).\\
+Correlation with open positions & Aggregate delta and vega across the book, not
+per trade.\\
+Expiry day & Halve size; gamma risk is extreme.\\
+\bottomrule
+\end{longtable}
+
+\section{Complete recommendation record}
+
+Every recommendation is an immutable, fully-explained record. This is both the
+product's differentiator and the audit trail.
+
+\begin{lstlisting}[language=Python,caption={Recommendation schema}]
+{
+  "reco_id": "uuid", "trace_id": "uuid",         # links back to the news item
+  "ts_emitted": "2026-08-26T09:20:41.318+05:30",
+  "trigger": {"event_id": "...", "class": "geopolitical.military_action",
+              "severity_cal": 8.2, "novelty": 0.91, "credibility": 0.88,
+              "sources": ["src_a","src_b"], "seconds_since_event": 4.1},
+  "forecast": {"horizon_min": 15,
+               "p_up": 0.31, "p_up_ci": [0.24, 0.39],
+               "quantiles": {"q05": -0.0142, "q25": -0.0071, "q50": -0.0033,
+                             "q75": 0.0004, "q95": 0.0061},
+               "sigma_forecast": 0.0089, "d_iv_forecast": +2.4,
+               "implied_move_15m": 0.0052, "edge_ratio": 1.71},
+  "structure": {"type": "bear_put_debit_spread",
+                "legs": [{"side":"BUY","strike":19500,"opt":"PE","qty":1},
+                         {"side":"SELL","strike":19300,"opt":"PE","qty":1}],
+                "net_debit": 78.5, "max_profit": 121.5, "max_loss": 78.5,
+                "breakeven": 19421.5},
+  "greeks_net": {"delta": -0.21, "gamma": 0.0009, "vega": -1.8, "theta": -3.1},
+  "mc": {"paths": 5000, "E_pnl": 21.4, "p_profit": 0.57,
+         "cvar5": -71.2, "score": 0.184},
+  "sizing": {"kelly_frac": 0.061, "used_frac": 0.015, "lots": 2,
+             "capital_at_risk": 11775},
+  "exits": {"target": 121.5, "stop": -39.0, "time_stop": "09:36:00",
+            "vol_stop": "exit if IV drops > 3 pts"},
+  "explanation": ["Military escalation, severity 8.2, first mention 4.1s ago",
+                  "Historical prior for this class: median -0.31% over 15m (n=23)",
+                  "Forecast |move| 1.71x implied move -> premium buying justified",
+                  "IV rank 62 -> spread chosen over naked put to cut vega",
+                  "Dealer gamma negative -> moves amplify"],
+  "gates_passed": ["credibility>=0.8","two_sources","not_already_priced",
+                   "liquidity_ok","daily_loss_limit_ok","regime_ok"],
+  "model_versions": {"cls":"ev-cls-v7","dir":"ens-v12","vol":"har-gb-v4",
+                     "iv":"ivd-v3","meta":"meta-v5"},
+  "mode": "PAPER"
+}
+\end{lstlisting}
+
+\begin{keybox}[title={Why the explanation field is not decoration}]
+Six months from now you will be trying to find out why the system lost money on
+a class of events. Without a stored, structured reason for every decision, that
+investigation is impossible and the system cannot improve. The explanation array
+is a first-class engineering requirement, not a UI nicety.
+\end{keybox}
+
+% =====================================================================
+\chapter{Risk Management and Kill Switches}
+\label{ch:risk}
+% =====================================================================
+
+\section{The risk gate sits between the brain and the money}
+
+No component may bypass the risk gate. It is deliberately simple, deliberately
+conservative, and deliberately hard to change (changes require a written
+justification recorded in the repository).
+
+\begin{longtable}{@{}p{4.4cm}p{3.0cm}p{7.0cm}@{}}
+\toprule
+\textbf{Limit} & \textbf{Starting value} & \textbf{Behaviour on breach}\\
+\midrule
+Per-trade capital at risk & 1.5\% & Reject or resize down.\\
+Daily loss limit & 3\% & \textbf{Stop for the day.} Flatten everything. No
+overrides.\\
+Weekly loss limit & 6\% & Stop for the week; mandatory review before restart.\\
+Max concurrent positions & 2 & Reject new signals.\\
+Net portfolio delta & bounded band & Reject trades that increase concentration.\\
+Net portfolio vega & bounded band & Prevents accidental all-in volatility bets.\\
+Max trades per day & 6 & Prevents overtrading in a noisy news day.\\
+Max trades per event & 1 & Prevents pyramiding on one hypothesis.\\
+Slippage guard & 0.5\% of premium & Cancel if fill price deviates.\\
+Time-of-day block & first 5 min, last 10 min & No new entries.\\
+Expiry-day multiplier & 0.5x size & Gamma risk.\\
+Model degraded flag & any & Signals become advisory only.\\
+Data staleness & feed silent 3 s & Halt everything.\\
+\bottomrule
+\end{longtable}
+
+\section{Kill switch hierarchy}
+
+\begin{longtable}{@{}p{2.2cm}p{4.0cm}p{8.4cm}@{}}
+\toprule
+\textbf{Level} & \textbf{Trigger} & \textbf{Action}\\
+\midrule
+L1 Soft & Drift alert, calibration decay, unusual latency & Reduce size by half;
+notify.\\
+L2 Pause & Daily loss limit, data quality failure, conflicting events &
+Stop new entries; manage existing positions only.\\
+L3 Flatten & Feed loss, model server failure, clock drift, retraction of the
+triggering news & Close all positions at market immediately; stop.\\
+L4 Lockout & Two L3 events in a week, or any unexplained loss & System refuses to
+run until a human clears it with a written root-cause note.\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[title={Physical kill switch}]
+Provide a single command and a single dashboard button that flattens everything
+and disables the system, requiring no dependency on the very components that may
+have failed. Test it monthly. Also test what happens when the broker API returns
+an error during the flatten --- that is the scenario that actually costs money.
+\end{warnbox}
+
+\section{Scenario stress tests (run before each promotion)}
+
+\begin{enumerate}
+\item Circuit breaker: the index hits a limit and trading halts mid-position.
+\item Flash crash and instant recovery within 90 seconds.
+\item Broker API returns success but the order was not placed.
+\item Duplicate order acknowledgement (double fill).
+\item Option chain goes stale but the spot feed stays live.
+\item A false catastrophic headline followed by a retraction 4 minutes later.
+\item Two contradictory high-severity events 20 seconds apart.
+\item Expiry-day final 30 minutes with implied volatility collapsing.
+\item Internet loss for 45 seconds with an open position.
+\item Model server returns predictions from a stale model version.
+\end{enumerate}
+
+For each: define the expected behaviour, implement it, and write an automated
+replay test. A system that has not been tested against these has not been
+tested.
