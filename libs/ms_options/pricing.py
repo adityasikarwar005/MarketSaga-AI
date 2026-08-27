@@ -108,7 +108,7 @@ def black76_greeks(f: float, k: float, sigma: float, t: float, r: float, kind: O
         delta = (1.0 if kind is OptType.CALL else -1.0) if itm else 0.0
         return Greeks(price=price, delta=delta, gamma=0.0, vega=0.0, theta=0.0, rho=0.0)
 
-    d1, d2 = _d1_d2(f, k, sigma, t)
+    d1, _ = _d1_d2(f, k, sigma, t)
     df = math.exp(-r * t)
     sqrt_t = math.sqrt(t)
     pdf_d1 = norm_pdf(d1)
@@ -116,18 +116,29 @@ def black76_greeks(f: float, k: float, sigma: float, t: float, r: float, kind: O
     gamma = df * pdf_d1 / (f * sigma * sqrt_t)
     vega = df * f * pdf_d1 * sqrt_t
 
-    if kind is OptType.CALL:
-        delta = df * norm_cdf(d1)
-        theta = -df * f * pdf_d1 * sigma / (2.0 * sqrt_t) - r * df * (
-            f * norm_cdf(d1) - k * norm_cdf(d2)
-        )
-        rho = -t * price
-    else:
-        delta = -df * norm_cdf(-d1)
-        theta = -df * f * pdf_d1 * sigma / (2.0 * sqrt_t) - r * df * (
-            k * norm_cdf(-d2) - f * norm_cdf(-d1)
-        )
-        rho = -t * price
+    # Theta. Differentiating c = e^-rT (F N(d1) - K N(d2)) with respect to T,
+    # and using the identity F phi(d1) = K phi(d2):
+    #
+    #     dc/dT = -r*c + e^-rT * F * phi(d1) * sigma / (2 sqrt(T))
+    #     theta = -dc/dT = -e^-rT * F * phi(d1) * sigma / (2 sqrt(T)) + r*c
+    #
+    # The r*c term is PLUS. It carried a minus here, which made theta too
+    # negative by exactly 2*r*c - about 2% on a thirty-day at-the-money option,
+    # and more as rates or time to expiry rise. Every other greek in this file
+    # matched a finite-difference check to eight decimal places while this one
+    # was 2.2% out, which is what made it findable: a wrong sign on a small term
+    # does not look wrong, it looks like a slightly faster decay.
+    #
+    # It is signed the same way for a put, because the decay term and the
+    # discounting term both act on the option's own value regardless of kind.
+    decay = -df * f * pdf_d1 * sigma / (2.0 * sqrt_t)
+    theta = decay + r * price
+
+    # Rho. In Black-76 the forward is an input, so r enters only through the
+    # discount factor and rho is -T times the price for calls and puts alike.
+    rho = -t * price
+
+    delta = df * norm_cdf(d1) if kind is OptType.CALL else -df * norm_cdf(-d1)
 
     return Greeks(price=price, delta=delta, gamma=gamma, vega=vega, theta=theta, rho=rho)
 

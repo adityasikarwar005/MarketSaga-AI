@@ -663,3 +663,129 @@ The ADR template asks two questions that are easy to skip: **what this makes
 worse**, and **how we would know it was a mistake**. If the first is empty the
 change has not been thought through — a limit with only upside was set wrong
 originally, and that is the decision to write down instead.
+
+---
+
+# Second full audit — 2026-08-27
+
+Three defects, one of them in arithmetic that eighty-two tests had been passing
+over, and one a composition failure where every module was individually correct.
+
+## 1. Black-76 theta had a sign error — fixed
+
+Differentiating `c = e^(-rT)(F·N(d₁) − K·N(d₂))` and using `F·φ(d₁) = K·φ(d₂)`:
+
+```
+dc/dT  = −r·c + e^(-rT)·F·φ(d₁)·σ / (2√T)
+theta  = −dc/dT = −e^(-rT)·F·φ(d₁)·σ / (2√T)  +  r·c
+```
+
+The `r·c` term carried a **minus**. Every other greek matched a finite-difference
+check to eight decimal places while theta was 2.2% out — which is what made it
+findable at all:
+
+| greek | code | finite difference | relative error |
+|---|---|---|---|
+| delta | 0.505299 | 0.505299 | 8e-09 |
+| gamma | 0.000411859 | 0.000411859 | 8e-08 |
+| vega | 2729.7812 | 2729.7812 | 2e-11 |
+| **theta** | **−2349.7080** | **−2300.0193** | **2.2%** |
+
+The discrepancy was exactly `2·r·c = 49.6888`. Too small to be a units mistake,
+far too large to be numerical noise beside the others.
+
+**A wrong sign on a small term does not look wrong.** It looks like a slightly
+faster decay — and it grows with rates and with time to expiry, so it would have
+been worst exactly where theta matters most.
+
+Thirty pricing tests passed throughout. They checked signs, magnitudes,
+monotonicity, put-call parity and IV round-trips — everything except the one
+thing a derivative has a definition for. Every greek is now pinned against a
+finite difference of the price it differentiates, across a grid that includes
+`r = 0` (where the bad term vanishes and the error is invisible).
+
+Also verified sound, at machine precision: put-call parity (1e-12), boundary
+behaviour at `T=0` and `σ=0`, price ≥ intrinsic at every strike, monotonicity in
+strike / vol / time, `Δc − Δp = e^(-rT)`, `Γc = Γp`, `νc = νp`, IV round-trip to
+1e-13, and `None` rather than a guess for unreachable prices.
+
+## 2. The sizing module's best defence was unreachable — fixed
+
+`KellyInput.p_lower` — running Kelly on the lower end of the model's own
+interval — appeared **only inside `sizing.py` and its tests**. Nothing in the
+model layer produced an interval, so every real call path would have passed
+`None` and sized on the point estimate: the case the module itself flags as
+least reliable.
+
+Worse, `Opinion.confidence` reads like it fills that role and does not. It
+measures **input completeness** — what fraction of the feature vector was
+present. A model with every feature present and enormous uncertainty about the
+probability reported `confidence = 1.00`.
+
+Each module was correct in isolation. The composition silently disabled the
+defence, which is the same shape as the class-weighting-versus-calibration bug
+found in the first audit.
+
+**Fix.** `IsotonicCalibrator` already knew how many calibration rows stood behind
+each mapped value; it now keeps them and returns a **Wilson score interval** on
+that block. Wilson rather than the normal approximation because the normal one
+returns bounds outside [0, 1] near the ends — exactly the confident region where
+a sizing rule is dangerous.
+
+| calibration rows | mean interval width |
+|---|---|
+| 400 | 0.221 |
+| 1,600 | 0.145 |
+| 6,000 | 0.102 |
+
+`Opinion` now carries `p_lower` / `p_upper`, and `confidence` is documented as
+what it actually is.
+
+### And a bug inside the fix
+
+The first version computed the interval from the raw score and capped only the
+point estimate, producing `p_up = 0.8500` with an interval of
+**[0.8424, 0.9570]** — the reported probability sitting on the floor of its own
+interval, and a lower bound asserting near-certainty about a level the edge cap
+existed precisely to disbelieve. A caller sizing on that `p_lower` would have
+been handed the uncapped opinion through the back door. The cap now applies to
+the bounds as well.
+
+## 3. A neutral model was reported as wrong every time — fixed
+
+`score()` counted a hit as `(p > 0.5 and y > 0) or (p < 0.5 and y < 0)`. At
+`p == 0.5` neither branch fires, so an abstention counted as an error:
+
+```
+always_neutral  n=1,000  log_loss=0.69315  brier=0.25000  acc=0.000 (on 1,000)
+```
+
+**Accuracy 0.000** — the most alarming number available, for the least alarming
+behaviour, and indistinguishable in the output from a model that was wrong every
+single time. Now:
+
+```
+always_neutral  n=1,000  log_loss=0.69315  brier=0.25000  acc=n/a (on 0, abstained on 1,000)
+```
+
+Accuracy is over the rows where a side was taken. An abstention still pays in log
+loss and Brier, which is where indecision belongs — it does not belong in a hit
+rate.
+
+## What was checked and found sound
+
+- **Determinism.** Every fitted model — boosted trees (including with
+  subsampling), quantile regressor, direction model, volatility model, stacked
+  ensemble, meta-labeller — produces identical output from identical input across
+  separate fits. A fit that cannot be rebuilt makes every claim from it
+  unfalsifiable.
+- **The M0 rules baseline on noise.** Log loss 0.69328 against a coin flip's
+  0.69315, opinions spanning [0.401, 0.585] inside the 0.12 edge cap. It forms
+  opinions from noisy features, as a rules engine must, and gains no skill from
+  them.
+- **Conformal coverage with a useless model.** Nominal 90% delivered 90.0% on a
+  target independent of every feature. That is the guarantee working as designed:
+  conformal coverage does not depend on the model being any good.
+- **`climatology()`** returns the base rate, not a log loss. Reading it as one
+  made it look wrong; it is not. Recorded here because the misreading was mine
+  and the next person will make it too.

@@ -24,6 +24,7 @@ from libs.ms_options.pricing import (
     implied_vol,
     intrinsic,
     norm_cdf,
+    norm_pdf,
     put_call_parity_gap,
     years_from_minutes,
 )
@@ -237,3 +238,113 @@ def test_no_nan_or_inf_anywhere_on_a_realistic_grid():
                 g = black76_greeks(F, k, v, t, R, OptType.CALL)
                 for value in (g.price, g.delta, g.gamma, g.vega, g.theta, g.rho):
                     assert math.isfinite(value), f"non-finite at k={k} t={t} v={v}"
+
+
+# --------------------------------------------------------------------------- #
+# Every greek against a finite difference of the price it is a derivative of.
+#
+# Thirty tests passed on this module while theta was 2.2% wrong: the r*c term
+# carried a minus where the derivation gives a plus. A wrong sign on a small
+# term does not look wrong, it looks like a slightly faster decay - and nothing
+# that checks signs, magnitudes or monotonicity can see it.
+#
+# A derivative has exactly one definition, and this is it.
+# --------------------------------------------------------------------------- #
+GRID = [
+    (24000.0, 24000.0, 0.14, 30 / 365, 0.065),
+    (24000.0, 22000.0, 0.18, 7 / 365, 0.065),
+    (24000.0, 26000.0, 0.22, 90 / 365, 0.065),
+    (51000.0, 51500.0, 0.16, 3 / 365, 0.070),
+    (24000.0, 24000.0, 0.14, 30 / 365, 0.000),
+]
+
+
+@pytest.mark.parametrize("kind", [OptType.CALL, OptType.PUT])
+@pytest.mark.parametrize(("f", "k", "sigma", "t", "r"), GRID)
+def test_delta_is_the_derivative_of_price_in_the_forward(f, k, sigma, t, r, kind):
+    h = f * 1e-5
+    fd = (
+        black76_price(f + h, k, sigma, t, r, kind) - black76_price(f - h, k, sigma, t, r, kind)
+    ) / (2 * h)
+    assert black76_greeks(f, k, sigma, t, r, kind).delta == pytest.approx(fd, rel=1e-5)
+
+
+@pytest.mark.parametrize("kind", [OptType.CALL, OptType.PUT])
+@pytest.mark.parametrize(("f", "k", "sigma", "t", "r"), GRID)
+def test_gamma_is_the_second_derivative(f, k, sigma, t, r, kind):
+    h = f * 1e-4
+    fd = (
+        black76_price(f + h, k, sigma, t, r, kind)
+        - 2 * black76_price(f, k, sigma, t, r, kind)
+        + black76_price(f - h, k, sigma, t, r, kind)
+    ) / (h * h)
+    assert black76_greeks(f, k, sigma, t, r, kind).gamma == pytest.approx(fd, rel=1e-4)
+
+
+@pytest.mark.parametrize("kind", [OptType.CALL, OptType.PUT])
+@pytest.mark.parametrize(("f", "k", "sigma", "t", "r"), GRID)
+def test_vega_is_the_derivative_in_volatility(f, k, sigma, t, r, kind):
+    h = 1e-5
+    fd = (
+        black76_price(f, k, sigma + h, t, r, kind) - black76_price(f, k, sigma - h, t, r, kind)
+    ) / (2 * h)
+    assert black76_greeks(f, k, sigma, t, r, kind).vega == pytest.approx(fd, rel=1e-5)
+
+
+@pytest.mark.parametrize("kind", [OptType.CALL, OptType.PUT])
+@pytest.mark.parametrize(("f", "k", "sigma", "t", "r"), GRID)
+def test_theta_is_minus_the_derivative_in_time(f, k, sigma, t, r, kind):
+    """The one that was wrong. theta = -dPrice/dT, and the r*c term is plus."""
+    h = t * 1e-5
+    fd = -(
+        black76_price(f, k, sigma, t + h, r, kind) - black76_price(f, k, sigma, t - h, r, kind)
+    ) / (2 * h)
+    assert black76_greeks(f, k, sigma, t, r, kind).theta == pytest.approx(fd, rel=1e-4)
+
+
+@pytest.mark.parametrize("kind", [OptType.CALL, OptType.PUT])
+@pytest.mark.parametrize(("f", "k", "sigma", "t", "r"), GRID)
+def test_rho_is_the_derivative_in_the_rate(f, k, sigma, t, r, kind):
+    h = 1e-6
+    fd = (
+        black76_price(f, k, sigma, t, r + h, kind) - black76_price(f, k, sigma, t, r - h, kind)
+    ) / (2 * h)
+    assert black76_greeks(f, k, sigma, t, r, kind).rho == pytest.approx(fd, rel=1e-4)
+
+
+def test_theta_is_wrong_by_two_r_c_if_the_sign_flips():
+    """Pins the specific defect. The discrepancy was exactly 2*r*price, which is
+    what identified it: too small to be a units error, far too large to be
+    numerical noise beside greeks matching to eight decimal places."""
+    f, k, sigma, t, r = 24000.0, 24000.0, 0.14, 30 / 365, 0.065
+    g = black76_greeks(f, k, sigma, t, r, OptType.CALL)
+    wrong = g.theta - 2 * r * g.price
+    h = t * 1e-5
+    fd = -(
+        black76_price(f, k, sigma, t + h, r, OptType.CALL)
+        - black76_price(f, k, sigma, t - h, r, OptType.CALL)
+    ) / (2 * h)
+    assert g.theta == pytest.approx(fd, rel=1e-4)
+    assert abs(wrong - fd) > 1.0, "the flipped-sign version is no longer distinguishable"
+
+
+def test_at_zero_rates_theta_is_pure_decay_but_rho_is_not_zero():
+    """At r=0 the r*c term drops out of theta, so a sign error on it is
+    invisible - which is why the grid above includes r=0 and does not stop
+    there.
+
+    Rho does *not* vanish, and the tempting assertion that it does is wrong:
+    rho is dPrice/dr = -T*c, a sensitivity rather than a level, and it is
+    -T*c whatever r currently happens to be.
+    """
+    t = 30 / 365
+    g = black76_greeks(24000.0, 24000.0, 0.14, t, 0.0, OptType.CALL)
+
+    # Pure decay: no discounting term left to add back.
+    assert g.theta == pytest.approx(
+        -24000.0 * norm_pdf(0.07 * math.sqrt(t)) * 0.14 / (2 * math.sqrt(t)), rel=0.05
+    )
+    assert g.theta < 0.0
+
+    assert g.rho == pytest.approx(-t * g.price)
+    assert g.rho < 0.0

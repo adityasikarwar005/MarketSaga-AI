@@ -225,3 +225,103 @@ def test_isotonic_still_corrects_real_overconfidence():
     before = expected_calibration_error(raw, labels)
     after = expected_calibration_error([cal.apply(p) for p in raw], labels)
     assert after < before, f"{before:.4f} -> {after:.4f}"
+
+
+# ------------------------------------------------------------- the interval
+def test_the_model_reports_an_interval_not_only_a_point():
+    """Sizing's strongest defence is running Kelly on the lower bound of the
+    model's own uncertainty. That defence was unreachable: Opinion carried no
+    interval, so every real call path fell back to the point estimate - the case
+    the sizing module itself flags as least reliable."""
+    rows, labels = sample(1600, 31)
+    model = DirectionModel().fit(rows, labels)
+    op = model.predict(rows[0])
+
+    assert op.has_interval
+    assert op.p_lower is not None and op.p_upper is not None
+    assert op.p_lower <= op.p_up <= op.p_upper
+
+
+def test_confidence_is_input_completeness_not_certainty():
+    """Two different quantities, and one name for both is how a position gets
+    sized on the wrong one."""
+    rows, labels = sample(1600, 32, missing=0.2)
+    model = DirectionModel().fit(rows, labels)
+
+    full: dict[str, float | None] = dict.fromkeys(NAMES, 0.5)
+    op = model.predict(full)
+    assert op.confidence == pytest.approx(1.0)
+    # Complete input, and still a real interval: completeness says nothing about
+    # how much evidence backed the probability.
+    assert op.has_interval and op.interval_width is not None and op.interval_width > 0
+
+
+def test_the_interval_narrows_as_evidence_accumulates():
+    """A probability backed by 200 calibration rows and one backed by 20 are not
+    the same claim."""
+    widths = []
+    for n in (400, 1600, 6000):
+        rows, labels = sample(n, 33)
+        model = DirectionModel().fit(rows, labels)
+        ops = [model.predict(r) for r in rows[:300]]
+        widths.append(sum(o.interval_width for o in ops) / len(ops))
+
+    assert widths == sorted(widths, reverse=True), f"widths did not narrow: {widths}"
+
+
+def test_the_edge_cap_applies_to_the_interval_too():
+    """Capping the point estimate and leaving the bounds produced p_up=0.8500
+    with an interval of [0.8424, 0.9570] - the reported probability sitting on
+    the floor of its own interval, and a lower bound asserting near-certainty
+    about a level the cap existed to disbelieve. A caller sizing on that p_lower
+    would have been handed the uncapped opinion through the back door."""
+    rows, labels = sample(2000, 34)
+    model = DirectionModel(max_edge=0.2).fit(rows, labels)
+
+    for r in rows[:300]:
+        op = model.predict(r)
+        assert abs(op.p_up - 0.5) <= 0.2 + 1e-9
+        if op.p_lower is not None and op.p_upper is not None:
+            assert abs(op.p_lower - 0.5) <= 0.2 + 1e-9
+            assert abs(op.p_upper - 0.5) <= 0.2 + 1e-9
+
+
+def test_an_uncalibrated_model_reports_no_interval_rather_than_a_fake_one():
+    """No discrimination means no calibration blocks, which means there is
+    nothing to compute an interval from. Saying so beats inventing one."""
+    rows, labels = sample(1600, 35, signal=False)
+    model = DirectionModel().fit(rows, labels)
+    assert model.no_discrimination
+    assert not model.predict(rows[0]).has_interval
+
+
+def test_the_wilson_interval_stays_inside_zero_and_one():
+    """The normal approximation returns bounds outside [0, 1] near the ends,
+    which is exactly the confident region where a sizing rule is dangerous."""
+    rng = random.Random(3)
+    raw = [rng.random() for _ in range(400)]
+    labels = [1 if rng.random() < p else 0 for p in raw]
+    cal = IsotonicCalibrator().fit(raw, labels)
+
+    for p in (0.0, 0.001, 0.5, 0.999, 1.0):
+        lo, hi = cal.interval(p)
+        assert 0.0 <= lo <= hi <= 1.0, f"interval [{lo}, {hi}] at p={p}"
+
+
+def test_a_thin_calibration_block_earns_a_wider_interval():
+    from libs.ms_models.direction import IsotonicCalibrator as Cal
+
+    rng = random.Random(4)
+    thin = Cal(min_block=5)
+    thin.fit([rng.random() for _ in range(60)], [rng.randint(0, 1) for _ in range(60)])
+    thick = Cal(min_block=5)
+    thick.fit([rng.random() for _ in range(3000)], [rng.randint(0, 1) for _ in range(3000)])
+
+    lo_t, hi_t = thin.interval(0.5)
+    lo_k, hi_k = thick.interval(0.5)
+    assert (hi_t - lo_t) > (hi_k - lo_k)
+
+
+def test_an_unfitted_calibrator_returns_the_point_itself():
+    cal = IsotonicCalibrator()
+    assert cal.interval(0.7) == (0.7, 0.7)

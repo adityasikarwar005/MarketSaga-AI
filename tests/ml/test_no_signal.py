@@ -401,3 +401,91 @@ def test_extreme_values_fall_in_the_end_bins_instead_of_erroring():
     binner = Binner().fit([[rng.gauss(0, 1)] for _ in range(200)])
     assert binner.apply([1e9]) == [binner.n_bins(0) - 1]
     assert binner.apply([-1e9]) == [0]
+
+
+# --------------------------------------------------- abstention is not an error
+def test_a_neutral_model_is_not_reported_as_wrong_every_time():
+    """p == 0.5 fires neither branch of a "was it right" check, so counting it
+    as an error made a perfectly neutral model report accuracy 0.000 on two
+    thousand outcomes - the most alarming number available for the least
+    alarming behaviour, and indistinguishable from a model that was wrong every
+    single time."""
+    from libs.ms_models.baseline import score
+
+    rng = random.Random(1)
+    outcomes = [rng.choice([1, -1]) for _ in range(1000)]
+    card = score("neutral", [0.5] * 1000, outcomes)
+
+    assert card.abstained == 1000
+    assert card.took_a_side == 0
+    assert "n/a" in card.render()
+    assert "abstained on 1,000" in card.render()
+
+
+def test_accuracy_is_over_the_rows_where_a_side_was_taken():
+    from libs.ms_models.baseline import score
+
+    # Two right, one wrong, two abstentions.
+    probs = [0.7, 0.7, 0.3, 0.5, 0.5]
+    outcomes = [1, 1, 1, 1, -1]
+    card = score("mixed", probs, outcomes)
+
+    assert card.directional_n == 5
+    assert card.abstained == 2
+    assert card.took_a_side == 3
+    assert abs(card.accuracy - 2 / 3) < 1e-12
+
+
+def test_an_abstention_still_pays_in_log_loss():
+    """Indecision belongs in the probabilistic scores, not in a hit rate. A
+    model that is neutral when something happened should still be charged for
+    having had no view."""
+    from libs.ms_models.baseline import score
+
+    neutral = score("neutral", [0.5] * 100, [1] * 100)
+    right = score("right", [0.9] * 100, [1] * 100)
+    assert neutral.log_loss > right.log_loss
+    assert neutral.brier > right.brier
+
+
+# ------------------------------------------------------------- reproducibility
+def test_every_fitted_model_is_reproducible():
+    """A fit that cannot be rebuilt from the same inputs cannot be checked
+    months later, and every claim made from it is then unfalsifiable."""
+    import math as _math
+
+    from libs.ms_models.direction import DirectionModel
+    from libs.ms_models.quantile import QuantileRegressor
+    from libs.ms_models.trees import GradientBoostedTrees
+    from libs.ms_models.volatility import VolatilityModel, build_har_rows
+
+    rng = random.Random(1)
+    rows = [[rng.gauss(0, 1) for _ in range(6)] for _ in range(400)]
+    labels = [rng.randint(0, 1) for _ in range(400)]
+    targets = [r[0] * 0.5 for r in rows]
+
+    a = GradientBoostedTrees(subsample=0.7).fit(rows, labels)
+    b = GradientBoostedTrees(subsample=0.7).fit(rows, labels)
+    assert a.predict_all(rows) == b.predict_all(rows)
+
+    qa = QuantileRegressor().fit(rows, targets)
+    qb = QuantileRegressor().fit(rows, targets)
+    assert [qa.predict(r).quantiles for r in rows[:20]] == [
+        qb.predict(r).quantiles for r in rows[:20]
+    ]
+
+    names = [f"f{i}" for i in range(6)]
+    drows: list[dict[str, float | None]] = [dict(zip(names, r, strict=True)) for r in rows] * 3
+    dlabels = [1 if v else -1 for v in labels] * 3
+    da = DirectionModel().fit(drows, dlabels)
+    db = DirectionModel().fit(drows, dlabels)
+    assert [da.predict(r).p_up for r in drows[:30]] == [db.predict(r).p_up for r in drows[:30]]
+
+    series, level = [], 4e-4
+    for _ in range(500):
+        level = _math.exp(0.9 * _math.log(level) + 0.1 * _math.log(4e-4) + 0.15 * rng.gauss(0, 1))
+        series.append(level)
+    har = build_har_rows(series, extra=[{"x": rng.gauss(0, 1)} for _ in range(500)])
+    va = VolatilityModel().fit(har)
+    vb = VolatilityModel().fit(har)
+    assert va.predict_all(har[:40]) == vb.predict_all(har[:40])

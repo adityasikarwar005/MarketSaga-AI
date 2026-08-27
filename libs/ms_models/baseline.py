@@ -37,10 +37,30 @@ class Opinion:
     """What a model says about one instant."""
 
     p_up: float
-    confidence: float = 0.0  # 0 = no opinion, 1 = maximally certain
+    # How complete the input was: 1.0 = every feature present, 0.5 = half the
+    # vector missing. Deliberately NOT "how sure the model is" - those are
+    # different quantities and one name for both is how a position gets sized
+    # on the wrong one. Uncertainty about the probability itself lives in
+    # p_lower / p_upper.
+    confidence: float = 0.0
+    # The model's own interval on p_up, when it can produce one. None means it
+    # cannot, and a caller that sizes on p_up alone is then knowingly using a
+    # point estimate rather than accidentally.
+    p_lower: float | None = None
+    p_upper: float | None = None
     reasons: list[str] = field(default_factory=list)
     model: str = ""
     version: str = ""
+
+    @property
+    def has_interval(self) -> bool:
+        return self.p_lower is not None and self.p_upper is not None
+
+    @property
+    def interval_width(self) -> float | None:
+        if self.p_lower is None or self.p_upper is None:
+            return None
+        return self.p_upper - self.p_lower
 
     @property
     def direction(self) -> int:
@@ -234,11 +254,24 @@ class ScoreCard:
     brier: float = 0.0
     accuracy: float = 0.0
     directional_n: int = 0
+    # Rows where the model sat exactly on the coin flip. Counted separately
+    # because an abstention is not a wrong answer, and the arithmetic that
+    # treats it as one is not obviously wrong until you see the output.
+    abstained: int = 0
+
+    @property
+    def took_a_side(self) -> int:
+        return self.directional_n - self.abstained
 
     def render(self) -> str:
+        acc = "n/a" if self.took_a_side == 0 else f"{self.accuracy:.3f}"
+        tail = f" (on {self.took_a_side:,}"
+        if self.abstained:
+            tail += f", abstained on {self.abstained:,}"
+        tail += ")"
         return (
             f"  {self.model:<12} n={self.n:,}  log_loss={self.log_loss:.5f}  "
-            f"brier={self.brier:.5f}  acc={self.accuracy:.3f} (on {self.directional_n:,})"
+            f"brier={self.brier:.5f}  acc={acc}{tail}"
         )
 
 
@@ -259,6 +292,7 @@ def score(model_name: str, probs: list[float], outcomes: list[int]) -> ScoreCard
     brier = 0.0
     correct = 0
     directional = 0
+    abstained = 0
     for p, y in zip(probs, outcomes, strict=True):
         target = 1.0 if y > 0 else 0.0 if y < 0 else 0.5
         p = min(1 - eps, max(eps, p))
@@ -266,13 +300,25 @@ def score(model_name: str, probs: list[float], outcomes: list[int]) -> ScoreCard
         brier += (p - target) ** 2
         if y != 0:
             directional += 1
-            if (p > 0.5 and y > 0) or (p < 0.5 and y < 0):
+            if p == 0.5:
+                # The model declined to take a side. Counting that as an error
+                # made a perfectly neutral model report accuracy 0.000 on two
+                # thousand outcomes - the most alarming number available for the
+                # least alarming behaviour, and indistinguishable in the output
+                # from a model that was wrong every single time.
+                abstained += 1
+            elif (p > 0.5 and y > 0) or (p < 0.5 and y < 0):
                 correct += 1
 
     card.log_loss = ll / len(probs)
     card.brier = brier / len(probs)
     card.directional_n = directional
-    card.accuracy = correct / directional if directional else 0.0
+    card.abstained = abstained
+    # Over the rows where it actually took a side. An abstention still pays in
+    # log loss and Brier above, which is where indecision belongs - it does not
+    # belong in a hit rate.
+    took_a_side = directional - abstained
+    card.accuracy = correct / took_a_side if took_a_side else 0.0
     return card
 
 

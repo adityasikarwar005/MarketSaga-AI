@@ -99,6 +99,7 @@ class IsotonicCalibrator:
     fitted: bool = False
     min_block: int = 20
     prior_strength: float = 5.0
+    weights: list[float] = field(default_factory=list)
 
     def fit(self, probs: Sequence[float], labels: Sequence[int]) -> IsotonicCalibrator:
         if len(probs) != len(labels):
@@ -124,8 +125,50 @@ class IsotonicCalibrator:
         k = self.prior_strength
         self.xs = [b[2] for b in blocks]
         self.ys = [(mean * weight + base * k) / (weight + k) for mean, weight, _ in blocks]
+        # How many calibration rows stand behind each mapped value. Kept because
+        # a probability backed by 200 observations and one backed by 20 are not
+        # the same claim, and everything downstream that sizes a position needs
+        # to be able to tell them apart.
+        self.weights = [w for _, w, _ in blocks]
         self.fitted = True
         return self
+
+    def _block_of(self, p: float) -> int:
+        if p <= self.xs[0]:
+            return 0
+        if p >= self.xs[-1]:
+            return len(self.xs) - 1
+        lo, hi = 0, len(self.xs) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self.xs[mid] < p:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    def interval(self, p: float, *, z: float = 1.96) -> tuple[float, float]:
+        """A Wilson score interval on the calibration block this lands in.
+
+        Wilson rather than the normal approximation because the normal one is
+        nonsense near 0 and 1 - it happily returns bounds outside [0, 1] and is
+        badly wrong at exactly the confident end where a sizing rule is most
+        dangerous.
+
+        The width is the honest statement of how much evidence backs this
+        probability. A block resting on 200 calibration rows earns a tight
+        interval; one resting on 20 does not, and a position sized on the point
+        estimate would treat them identically.
+        """
+        if not self.fitted or not self.xs:
+            return (p, p)
+        i = self._block_of(p)
+        n = max(1.0, self.weights[i])
+        phat = self.ys[i]
+        denom = 1.0 + z * z / n
+        centre = (phat + z * z / (2 * n)) / denom
+        half = z * math.sqrt(phat * (1 - phat) / n + z * z / (4 * n * n)) / denom
+        return (max(0.0, centre - half), min(1.0, centre + half))
 
     def apply(self, p: float) -> float:
         if not self.fitted or not self.xs:
@@ -399,10 +442,29 @@ class DirectionModel(Model):
 
         raw = self.booster.predict_proba(self._vector(features))
         p = self.calibrator.apply(raw) if self.calibrator else raw
+        # The interval comes from the calibration block this landed in: how much
+        # evidence stands behind a probability at this level.
+        lower = upper = None
+        if self.calibrator is not None:
+            lower, upper = self.calibrator.interval(raw)
+
         # Clamp toward the coin flip rather than clipping at the ends: an edge
         # this model cannot support should read as less certainty, not as a
         # different probability.
-        p = 0.5 + max(-self.max_edge, min(self.max_edge, p - 0.5))
+        #
+        # The same clamp applies to the interval, and that is not tidiness. The
+        # first version capped the point estimate and left the bounds where they
+        # were, which produced p_up=0.8500 with an interval of [0.8424, 0.9570]
+        # - the reported probability sitting on the very floor of its own
+        # interval, and a lower bound asserting near-certainty about a level the
+        # cap existed precisely to disbelieve. A caller sizing on that p_lower
+        # would have been handed the uncapped opinion through the back door.
+        def clamp(x: float) -> float:
+            return 0.5 + max(-self.max_edge, min(self.max_edge, x - 0.5))
+
+        p = clamp(p)
+        if lower is not None and upper is not None:
+            lower, upper = clamp(lower), clamp(upper)
 
         missing = [n for n in self.names if features.get(n) is None]
         depth = self.report.depth if self.report else self.booster.max_depth
@@ -416,6 +478,8 @@ class DirectionModel(Model):
 
         return Opinion(
             p_up=p,
+            p_lower=lower,
+            p_upper=upper,
             # Missing inputs reduce confidence proportionally. A model asked to
             # opine on half a feature vector should say so rather than answer at
             # full strength.
