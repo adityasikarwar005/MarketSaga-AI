@@ -174,9 +174,9 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M30** | Abnormal-return engine | L3 | P4 | M13, M17 | | ☑ |
 | **M31** | Event-study runner | L3 | P4 | M30, M25 | | ☑ |
 | **M32** | Hierarchical Bayesian impact priors | L3 | P4 | M31 | ⚙ |☑ |
-| **M33** | Cross-asset transfer estimator | L3 | P4 | M15, M30 | ⚙ | ☐ |
+| **M33** | Cross-asset transfer estimator | L3 | P4 | M15, M30 | ⚙ |☑ |
 | **M34** | Live impact scorer | L3 | P4 | M32, M29 | | ☐ |
-| **M35** | Overnight gap forecaster | L3 | P4 | M33, M31 | ⚙ | ☐ |
+| **M35** | Overnight gap forecaster | L3 | P4 | M33, M31 | ⚙ |☑ |
 | **M40** | Feature registry & framework | L4 | P5 | M03, M17 | | ☑ |
 | **M41** | Offline materialiser | L4 | P5 | M40 | | ☑ |
 | **M42** | Online feature server | L4 | P5 | M40, M04 | | ☑ |
@@ -1600,7 +1600,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L0 Foundation | 7 | 6 | 1 | 0 |
 | L1 Market Data | 10 | 9 | 1 | 0 |
 | L2 News & Events | 10 | 0 | 0 | 10 |
-| L3 Impact | 6 | 3 | 0 | 3 |
+| L3 Impact | 6 | 5 | 0 | 1 |
 | L4 Features | 6 | 4 | 1 | 1 |
 | L5 Models | 11 | 3 | 0 | 8 |
 | L6 Projection | 3 | 0 | 0 | 3 |
@@ -1608,7 +1608,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **79** | **25** | **4** | **50** |
+| **Total** | **79** | **27** | **4** | **48** |
 
 ### Gate ledger
 | Gate | Blocks | Status |
