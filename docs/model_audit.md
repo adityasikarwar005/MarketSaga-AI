@@ -1023,3 +1023,79 @@ anything with a symbol — so the caller passes whatever it already has.
 Where a real conversion is needed (broker positions into the gate's book state)
 it is explicit and commented: the greeks are dropped because the broker does not
 know them and **must not invent zeros that read as real exposure**.
+
+---
+
+# M93 ledger and M92 alerting, 2026-08-28
+
+Two S18 modules that need no broker and no web framework.
+
+## M93 — the audit spine
+
+**Predictions and outcomes live in the same row.** Split across two tables joined
+by an id, three very different situations collapse into one empty join: a
+prediction whose outcome was never written, one whose outcome row was lost, and
+one that was never meant to have an outcome. In one row, "unresolved" is a state
+the row carries, with a reason attached.
+
+**The file is the source of truth; Postgres is an index.** The ledger must never
+lose a write, and the moment it most needs writing is the moment something has
+gone wrong — which is also when the database is most likely unreachable. Same
+shape the recorder already uses, for the same reason: the durable thing should
+have the fewest moving parts.
+
+**Resolution appends, it does not edit.** Writing the outcome adds a second
+record for the same `entry_id`; the reader takes the last one and the earlier
+stays on disk. Editing in place would mean the file no longer shows what was
+believed at prediction time, which is the one thing it exists to preserve — and
+that is exactly the edit that gets made with good intentions.
+
+**Resolving early is refused.** An outcome resolved before its horizon measures a
+different quantity than the one predicted, and the resulting number would be
+perfectly plausible. Late resolutions are recorded with their lag, because a
+systematically late resolution is a systematically different measurement and
+nobody notices unless it is written down.
+
+**`was_right` is `None` while pending, never `False`.** Defaulting it to False
+makes every hit rate drift downward as the day goes on, which reads as a model
+decaying.
+
+The audit is three-way — resolved, unresolvable-with-a-reason, or still inside
+its horizon — because a count of "resolved" alone cannot tell a healthy day from
+one where half the outcomes were quietly never written. An unresolvable
+prediction **must** state why: a row with no outcome and no explanation cannot be
+told apart from one that was lost, and that single ambiguity makes every report
+built on the table unauditable. The database constraint enforces it too.
+
+## M92 — alerting
+
+Two rules that pull against each other.
+
+**Rate-limit everything**, so the alerts stay worth reading. Alert fatigue is not
+a comfort problem; it is the mechanism by which a working alarm fails — the
+operator learns that most notifications need no action, and the one that did
+arrives into that habit.
+
+**Except the ones that cannot be missed.** A risk breach is not a notification,
+it is an instruction, and a rate limiter that can swallow it has converted a
+safety control into a convenience. `CRITICAL` bypasses both the rate limit and
+every mute, and there is **no parameter that changes that** — a test asserts
+`emit` has not grown an override argument, because a configurable override would
+be configured on the day it mattered, by someone trying to get some sleep.
+
+The bypass keys off **severity, not kind**, so a new critical alert is protected
+the moment it enters the table rather than when someone remembers the special
+case.
+
+The limit is **per alert key**, not global: a global budget means a burst of one
+kind exhausts the allowance for every other, which is precisely backwards — the
+burst is what should be throttled.
+
+Mutes are **per channel and time-bounded**. "Mute everything" is the button
+pressed during the noisy hour and forgotten by the quiet one, so the failure mode
+here is a mute that lapses rather than one that persists. A mute needs a reason,
+because an unexplained silence is indistinguishable from a broken alerter.
+
+And the suppressed list is kept rather than dropped: *nothing happened* and
+*forty things happened and were suppressed* look identical from the receiving
+end, and only one of them is a quiet day.
