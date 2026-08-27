@@ -789,3 +789,90 @@ rate.
 - **`climatology()`** returns the base rate, not a log loss. Reading it as one
   made it look wrong; it is not. Recorded here because the misreading was mine
   and the next person will make it too.
+
+---
+
+# M80 + M81 — the paper broker and the fill model, 2026-08-27
+
+Sprint order says S16 is M76 M77 **M80 M81**. These two are a pair: a paper
+broker without a fill model is a paper broker that lies.
+
+## The tie rule
+
+A bar has a high and a low and does not record which came first. When a
+position's target and stop both sit inside one bar, there are three options:
+assume the target (flatters everything), assume the stop (pessimistic), or model
+the path (needs tick data a bar-resolution backtest does not have).
+
+This takes the stop. Not because stops always fill first, but because **the
+error is bounded and one-directional** — a real day can only be better than
+reported, and a backtest that can only understate is one whose number means
+something.
+
+The opposite convention is the one a naive implementation reaches by accident,
+because targets tend to get checked first. It turns the most volatile sessions —
+exactly the ones where both levels are hit — into the most profitable ones, and
+the equity curve simply looks good.
+
+`worst_case_sequence` counts how many exits were resolved by the tie rather than
+by the data. If that share is large, the result is largely a statement about the
+convention and not about the strategy, and that is worth knowing before quoting
+the number.
+
+## Fills at the far touch, never the mid
+
+A marketable order pays what someone else is willing to trade at. Filling at the
+mid claims half the spread as free profit **on every leg** — on a four-order
+option spread that is most of the edge, and it is the single most common way a
+backtest lies.
+
+A resting limit order is different again: it fills only when the market **trades
+through** it, and even then the queue discount applies. Assuming a limit fills
+the moment price touches it assumes you were first in the queue every time.
+`queue_ahead = 1.0` assumes you were last, which is the assumption reality cannot
+beat.
+
+Impact is zero inside the displayed size and grows with the square root of the
+excess, scaled by the spread — a wide market punishes size harder than a tight
+one, which is why liquidity is a feature in the sizing layer. An empty book is
+treated as expensive rather than free: nothing displayed is not infinite
+liquidity.
+
+## The interface is the point
+
+"Same interface as the live adapter" is the M80 spec's first line, and there was
+no such interface — `ms_broker` had a feed and an auth flow and nothing that
+places an order. `protocol.py` now defines it once, and a test asserts
+`PaperBroker` implements every abstract method and has no unimplemented ones.
+
+A paper broker with a convenient extra method is one the strategy learns to
+depend on and production does not have.
+
+Three things the interface deliberately does **not** promise:
+
+- **That an order fills.** `place` returns an acknowledgement. Real brokers
+  accept an order and report the fill later, sometimes never; an interface that
+  returns a fill synchronously teaches a habit that breaks in production.
+- **That the broker's positions are the system's positions.** Reconciling those
+  is a separate problem, and pretending they are the same is how a phantom
+  position gets doubled.
+- **That cancel succeeds.** It returns whether the request was accepted. An order
+  can fill in the microsecond between deciding to cancel and the cancel arriving.
+
+## Position arithmetic — the case that gets written wrong
+
+Adding averages the price. Reducing realises against the average and leaves it
+unchanged. **Crossing through zero does both**, in that order, and the new side
+starts at the crossing fill's price *alone*.
+
+Blending them produces an average that is a mixture of a long and a short, which
+is not the price of anything. It shows up as P&L drifting slowly from the truth
+and stays invisible until a reconciliation.
+
+Also enforced: every fill pays real costs through `ms_options.costs`, so a
+round trip at an unchanged price **loses money** — which is the most important
+sanity check a paper broker has. Equity refuses to mark a position it has no
+price for, because marking at zero turns a data gap into a loss that looks real.
+Marks come from the mid, not the touch: marking at the liquidation price
+conflates valuation with exit cost, and charging that twice understates every
+open position.
