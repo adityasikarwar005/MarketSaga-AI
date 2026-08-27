@@ -178,6 +178,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M33** | Cross-asset transfer estimator | L3 | P4 | M15, M30 | ⚙ |☑ |
 | **M34** | Live impact scorer | L3 | P4 | M32, M29 | | ☐ |
 | **M35** | Overnight gap forecaster | L3 | P4 | M33, M31 | ⚙ |☑ |
+| **M35a** | Model audit: null tests for every fitted component | L5 | P4 | M32, M33, M35 | | ☑ |
 | **M40** | Feature registry & framework | L4 | P5 | M03, M17 | | ☑ |
 | **M41** | Offline materialiser | L4 | P5 | M40 | | ☑ |
 | **M42** | Online feature server | L4 | P5 | M40, M04 | | ☑ |
@@ -1610,7 +1611,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **80** | **28** | **4** | **48** |
+| **Total** | **81** | **29** | **4** | **48** |
 
 ### Gate ledger
 | Gate | Blocks | Status |

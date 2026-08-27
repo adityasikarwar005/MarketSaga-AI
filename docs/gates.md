@@ -9,7 +9,7 @@
 | G1 | Market Data Spine | Byte-identical replay ×2; 20 sessions ≥99.5% candles; chain ≥95%; restore verified | — | — | — | ☐ |
 | G2 | News & PIT Store | 30 days collected; dup rate <3%; publish-ts within 5s for ≥90% of 200 sampled | — | — | — | ☐ |
 | G3 | Event Classification | macro-F1 ≥0.80; recall(sev≥7) ≥0.95; noise FP ≤2%; p95 ≤120ms; severity↔\|AR₃₀\| Spearman ≥0.35; AP-hack test passes | — | — | — | ☐ |
-| G4 | Impact Library + Gap | >=15 classes with n_eff >=8; >=5 with CI excluding 0; gap CRPS beats naive by >=10%; 20 auto briefings | gap: -22.2% vs naive (best of 2 trials) | 2026-08-27 | — | NOT PASSED |
+| G4 | Impact Library + Gap | >=15 classes with n_eff >=8; >=5 with CI excluding 0; gap CRPS beats naive by >=10%; 20 auto briefings | gap: -13.7% vs naive, calibrated (12 trials) | 2026-08-27 | — | NOT PASSED |
 | **G5** | **Features + Baseline** | **M1 > M0 on log loss (bootstrap CI excl. 0); reliability slope ∈[0.85,1.15]; Brier skill >0.02; AUC ≥0.55 on high-sev; M5 beats HAR-RV on QLIKE; edge-realisation slope >0.5** | — | — | — | ☐ |
 | G6 | Candle Projection | 90% coverage = 90%±3%; PIT uniform; CRPS beats RW-GARCH and implied by ≥8%; render <120ms | — | — | — | ☐ |
 | G7 | Options + Simulator | ≥12 months L2: PF ≥1.2; positive in ≥3 of 4 quarters; maxDD ≤12%; deflated Sharpe >0; all 10 stress scenarios pass | — | — | — | ☐ |
@@ -68,3 +68,28 @@ until the gate passes is the failure mode this ledger exists to prevent, and the
 trial count above is what would make any later "improvement" honest. The gate is
 re-opened when intraday data exists, which is the change that would alter the
 answer rather than the estimate.
+
+### Update, same day, after the model audit
+
+`docs/model_audit.md` found that the diagnosis above was wrong in its framing.
+The dominant fixable defect was not overfitting but an **inert L2 penalty**:
+`l2=1e-4` shrank the weights by 0.2% against no penalty at all, so the model was
+effectively unregularised no matter what the constant said.
+
+Choosing the penalty per fit on an inner split of the training data:
+
+| | CRPS | vs naive | cov90 |
+|---|---|---|---|
+| 28 features, inert penalty | 0.003216 | -29.3% | 95.5% MISCALIBRATED |
+| 10 features, inert penalty | 0.003040 | -22.2% | 93.7% MISCALIBRATED |
+| 10 features, selected penalty | 0.002827 | **-13.7%** | **90.9% calibrated** |
+
+Half the deficit closed and the intervals are calibrated for the first time.
+The gate still does not pass, and the reason is now specific rather than vague:
+the regularisation curve plateaus where the feature weights are near zero, so
+the best available version of this model uses almost nothing, while the naive
+baseline uses the one variable that actually moves the open. A uniform penalty
+taxes that feature as hard as the twenty-seven useless ones. Specification, not
+tuning - so the gate stays shut until intraday data exists.
+
+Twelve trials, all in `research/experiments.jsonl`.

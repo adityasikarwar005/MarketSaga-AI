@@ -26,6 +26,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from statistics import fmean
 
 from libs.ms_core.obs import get_logger
 from libs.ms_data.crossasset import CrossAssetRegistry, OvernightWindow, SeriesMove
@@ -36,6 +37,7 @@ from libs.ms_models.quantile import (
     DistributionComparison,
     QuantileForecast,
     QuantileRegressor,
+    pinball_loss,
     score_forecasts,
 )
 
@@ -206,6 +208,57 @@ class GapForecast:
         return "\n".join(lines)
 
 
+L2_GRID: tuple[float, ...] = (0.001, 0.01, 0.1, 0.5, 1.0, 4.0)
+
+
+def select_l2(
+    rows: Sequence[Sequence[float]],
+    targets: Sequence[float],
+    *,
+    epochs: int,
+    grid: Sequence[float] = L2_GRID,
+    val_share: float = 0.25,
+) -> float:
+    """Pick the penalty on an inner split of the training data.
+
+    A fixed default cannot be right: the correct amount of regularisation
+    depends on how many features there are, how many rows, and how much of the
+    signal is real, and none of those are known when the constant is written.
+
+    The value that was there - 1e-4 - was measured to shrink the weights by
+    0.2% against no penalty at all, so it was not a weak default but an absent
+    one. Sweeping it on the real gap data moved the result from -22.2% to
+    -11.5% against the naive baseline, monotonically. A knob worth that much
+    cannot be a guess.
+
+    The split is inner and chronological: this never sees the calibration set,
+    let alone the test fold, so choosing here costs nothing in honesty. It is
+    still a search, so the caller owes it to the trial log if it acts on the
+    result.
+    """
+    n_val = int(len(rows) * val_share)
+    if n_val < 8 or len(rows) - n_val < 20:
+        # Too little to choose on. Take the middle of the grid rather than an
+        # end of it: a bad guess in the centre is a smaller mistake than a
+        # confident one at either extreme.
+        return grid[len(grid) // 2]
+
+    inner_fit, inner_val = rows[: len(rows) - n_val], rows[len(rows) - n_val :]
+    y_fit, y_val = targets[: len(targets) - n_val], targets[len(targets) - n_val :]
+
+    best, best_loss = grid[len(grid) // 2], math.inf
+    for candidate in grid:
+        model = QuantileRegressor(epochs=epochs, l2=candidate).fit(inner_fit, y_fit)
+        loss = fmean(
+            pinball_loss(y, model.predict(x).quantiles[a], a)
+            for x, y in zip(inner_val, y_val, strict=True)
+            for a in model.quantiles
+        )
+        if loss < best_loss:
+            best, best_loss = candidate, loss
+    return best
+
+
 class GapForecaster:
     """Quantile regression on the overnight state.
 
@@ -223,6 +276,7 @@ class GapForecaster:
         epochs: int = 400,
         calibration_share: float = 0.25,
         features: Sequence[str] | None = None,
+        l2: float | None = None,
     ) -> None:
         self.registry = registry
         # An explicit feature list overrides the one derived from the registry.
@@ -230,7 +284,18 @@ class GapForecaster:
         # series is present in the data, which is the right default for a live
         # feed and the wrong one for a two-year sample of daily bars.
         self.names = list(features) if features is not None else feature_names(registry)
-        self.model = QuantileRegressor(quantiles=quantiles, epochs=epochs)
+        self.quantiles = tuple(quantiles)
+        self.epochs = epochs
+        # None means "choose it from the training data", which is the default.
+        # A fixed value is honoured as given, for sweeps and for reproducing an
+        # older fit.
+        self.l2 = l2
+        self.chosen_l2 = l2
+        self.model = QuantileRegressor(
+            quantiles=quantiles,
+            epochs=epochs,
+            **({} if l2 is None else {"l2": l2}),
+        )
         self.climatology = ClimatologyForecaster(quantiles=quantiles)
         self.calibration_share = calibration_share
         self.conformal: ConformalQuantileForecaster | None = None
@@ -274,6 +339,11 @@ class GapForecaster:
 
         rows = [s.vector(self.names) for s in fit_set]
         targets = [s.target for s in fit_set]
+        if self.l2 is None:
+            self.chosen_l2 = select_l2(rows, targets, epochs=self.epochs)
+            self.model = QuantileRegressor(
+                quantiles=self.quantiles, epochs=self.epochs, l2=self.chosen_l2
+            )
         self.model.fit(rows, targets)
         self.climatology.fit(rows, targets)
 
@@ -362,6 +432,7 @@ def walk_forward_evaluate(
     n_folds: int = 4,
     min_train: int = MIN_SESSIONS_TO_FIT,
     features: Sequence[str] | None = None,
+    l2: float | None = None,
 ) -> GapEvaluation | None:
     """Train on the past, test on the future, repeatedly.
 
@@ -390,7 +461,7 @@ def walk_forward_evaluate(
         if len(train) < min_train or not test:
             continue
 
-        model = GapForecaster(registry, features=features).fit(train)
+        model = GapForecaster(registry, features=features, l2=l2).fit(train)
         naive = NaiveGapBaseline().fit(train)
         for sample in test:
             out = model.predict(sample)

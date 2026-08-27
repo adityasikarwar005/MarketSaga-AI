@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from itertools import pairwise
 from statistics import fmean
@@ -45,6 +45,67 @@ log = get_logger(__name__)
 # observations is not many; it is the floor at which a standard error means
 # anything at all.
 MIN_PAIRS_FOR_BETA = 30
+
+
+def _sidak_z(searched: int) -> float:
+    """Two-sided critical value that keeps the family-wise error at 5%.
+
+    Sidak rather than Bonferroni because the lag candidates are correlated
+    rather than independent, so Bonferroni would overcorrect. Neither is exact
+    here; both are far better than pretending the search did not happen.
+    """
+    if searched <= 1:
+        return 1.96
+    alpha = 1.0 - (1.0 - 0.05) ** (1.0 / searched)
+    return _norm_ppf(1.0 - alpha / 2.0)
+
+
+def _norm_ppf(p: float) -> float:
+    """Inverse standard normal, Acklam's rational approximation."""
+    if not 0.0 < p < 1.0:
+        raise ValueError("p must be in (0, 1)")
+    a = [
+        -3.969683028665376e01,
+        2.209460984245205e02,
+        -2.759285104469687e02,
+        1.383577518672690e02,
+        -3.066479806614716e01,
+        2.506628277459239e00,
+    ]
+    b = [
+        -5.447609879822406e01,
+        1.615858368580409e02,
+        -1.556989798598866e02,
+        6.680131188771972e01,
+        -1.328068155288572e01,
+    ]
+    c = [
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e00,
+        -2.549732539343734e00,
+        4.374664141464968e00,
+        2.938163982698783e00,
+    ]
+    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00, 3.754408661907416e00]
+    lo, hi = 0.02425, 1 - 0.02425
+    if p < lo:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1
+        )
+    if p > hi:
+        q = math.sqrt(-2 * math.log(1 - p))
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1
+        )
+    q = p - 0.5
+    r = q * q
+    return (
+        (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5])
+        * q
+        / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -62,12 +123,21 @@ class Fit:
     def t_stat(self) -> float:
         return self.beta / self.stderr if self.stderr > 0 else 0.0
 
+    searched: int = 1  # how many candidates were compared to produce this one
+
     def ci(self, z: float = 1.96) -> tuple[float, float]:
         return self.beta - z * self.stderr, self.beta + z * self.stderr
 
     @property
     def significant(self) -> bool:
-        lo, hi = self.ci()
+        """Significant *after* paying for the search that produced it.
+
+        A 95% interval is only a 95% interval for a hypothesis chosen before
+        the data. Pick the best of six lags and the nominal 5% false-positive
+        rate becomes about 30% - measured, not assumed. The Sidak correction
+        widens the interval to keep the family-wise rate at 5%.
+        """
+        lo, hi = self.ci(z=_sidak_z(self.searched))
         return (lo > 0) or (hi < 0)
 
 
@@ -236,10 +306,15 @@ def best_lag(
 ) -> TransferCoefficient | None:
     """The lag at which the relationship is strongest.
 
-    Searching over lags is itself a multiple-comparison problem: try six lags on
-    noise and one of them will look good. The winner is only returned when it is
-    significant on its own terms, and the caller still owes the deflated-Sharpe
-    style correction if it acts on many of these.
+    Searching over lags is itself a multiple-comparison problem, and not a small
+    one. Measured on independent noise, a single fixed lag looks significant
+    about 8% of the time; the best of six looks significant 30% of the time.
+
+    So the winner carries the size of the search that produced it, and its
+    ``significant`` property pays for that search. The coefficient is still
+    returned either way - a real relationship at an unproven lag is worth
+    seeing - but nothing downstream may treat it as established unless
+    ``significant`` says so, which is now a much harder thing to say.
     """
     candidates = []
     for lag in lags:
@@ -250,7 +325,10 @@ def best_lag(
             candidates.append(coef)
     if not candidates:
         return None
-    return max(candidates, key=lambda c: c.fit.r_squared)
+    winner = max(candidates, key=lambda c: c.fit.r_squared)
+    # len(candidates), not len(lags): only the lags that actually produced a
+    # usable fit were ever in the running.
+    return replace(winner, fit=replace(winner.fit, searched=len(candidates)))
 
 
 # --------------------------------------------------------------------------- #

@@ -176,7 +176,18 @@ class QuantileRegressor:
         *,
         learning_rate: float = 0.05,
         epochs: int = 400,
-        l2: float = 1e-4,
+        # Was 1e-4, which was measured to shrink the weights by 0.2% against no
+        # penalty at all - not a weak default but an absent one, reading as a
+        # defence that was not there. The weight decay applied per epoch is
+        # lr * l2, so at lr=0.05 anything below about 0.01 does nothing over a
+        # few hundred epochs.
+        #
+        # This value is a fallback, not a recommendation. The right penalty
+        # depends on the feature count, the row count and how much of the
+        # signal is real; GapForecaster chooses it per fit on an inner split
+        # (see gap.select_l2) and callers fitting this class directly should do
+        # the same rather than trusting the number here.
+        l2: float = 0.1,
     ) -> None:
         self.quantiles = tuple(quantiles)
         self.lr = learning_rate
