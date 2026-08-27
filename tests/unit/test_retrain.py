@@ -342,9 +342,18 @@ def test_a_run_with_no_challenger_is_not_a_failure():
     assert "nothing to evaluate" in result.notes
 
 
-def test_the_report_names_the_trial_count():
+def test_the_report_names_the_trial_count(tmp_path):
     """Fifty-two retrains a year is fifty-two attempts at beating the
-    incumbent."""
+    incumbent.
+
+    The log goes to tmp_path, and that is not incidental. A bare
+    ``ExperimentLog()`` defaults to the repository's own
+    ``research/experiments.jsonl`` - the hash-chained record whose only job is
+    honest trial counting - so a test written that way appends a fabricated
+    trial on every run, forever, and every deflated statistic downstream reads
+    the inflated count. This test did exactly that until it was caught by a
+    ``git status`` showing the log modified after a suite run.
+    """
     r = Registry()
     c = r.register(ready_challenger())
     result = retrain(
@@ -354,7 +363,7 @@ def test_the_report_names_the_trial_count():
         challenger=c,
         challenger_score=score(c, log_loss=0.58),
         incumbent_score=None,
-        experiment_log=ExperimentLog(),
+        experiment_log=ExperimentLog(tmp_path / "experiments.jsonl"),
     )
     assert "has not necessarily found anything" in result.render()
 

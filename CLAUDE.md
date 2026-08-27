@@ -86,7 +86,7 @@ event → ms_models (direction, volatility, ensemble, meta) → ms_options.sizin
 
 This is the part that distinguishes the project, and it is easy to break by accident:
 
-- **`research/experiments.jsonl`** — every model evaluation, hash-chained so deleting a disappointing run breaks the chain at a reportable index. Versioned in git, deliberately *not* under `build/`. Never edit it; append via `ExperimentLog.record`.
+- **`research/experiments.jsonl`** — every model evaluation, hash-chained so deleting a disappointing run breaks the chain at a reportable index. Versioned in git, deliberately *not* under `build/`. Never edit it; append via `ExperimentLog.record`. A bare `ExperimentLog()` writes to this real file — correct in `jobs/`, a bug in a test, so tests must pass an explicit `tmp_path`. An autouse fixture in `tests/conftest.py` fails any test that touches it, because one test did for several sessions and the only symptom was a modified file in `git status`.
 - **`research/kill_drills.jsonl`** — kill-switch drill results.
 - **`data/ledger/*.ndjson`** — the audit spine. Append-only; resolution writes a *superseding* record rather than editing. The file is the source of truth and Postgres (`paper_ledger`) is an index built from it.
 - **`docs/decisions/`** — ADRs. Changing a risk limit requires one; `limit_change_requires_adr` reports which changed fields have none.

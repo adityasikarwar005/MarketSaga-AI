@@ -53,3 +53,32 @@ def _reset_metrics():
     METRICS.reset()
     yield
     METRICS.reset()
+
+
+@pytest.fixture(autouse=True)
+def _the_real_experiment_log_is_off_limits():
+    """No test may append to `research/experiments.jsonl`.
+
+    That file is the hash-chained record of every genuine attempt at finding an
+    edge, and its only purpose is an honest trial count - the deflated Sharpe
+    and every multiple-comparison correction downstream read it. A test that
+    writes there adds a fabricated trial on every suite run, forever, and
+    nothing about the result looks wrong: the chain still verifies, the entries
+    are well-formed, and the count is simply too high.
+
+    A bare `ExperimentLog()` defaults to that path, which is correct for
+    `jobs/` and a mistake in a test. It was a mistake in one test for several
+    sessions, and it took a `git status` to notice - hence a guard rather than
+    a convention.
+    """
+    from libs.ms_models.cv import EXPERIMENT_LOG
+
+    before = EXPERIMENT_LOG.stat().st_mtime_ns if EXPERIMENT_LOG.exists() else None
+    yield
+    after = EXPERIMENT_LOG.stat().st_mtime_ns if EXPERIMENT_LOG.exists() else None
+    if before != after:
+        raise AssertionError(
+            f"this test wrote to {EXPERIMENT_LOG}, the real experiment log. Pass an "
+            "explicit path - ExperimentLog(tmp_path / 'experiments.jsonl') - because "
+            "a fabricated trial inflates the count every deflated statistic reads."
+        )

@@ -210,7 +210,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M80** | Paper broker adapter | L8 | P7 | M77 | | ☑ |
 | **M81** | Fill & slippage model | L8 | P7 | M80 | ⚙ | ☑ |
 | **M82** | L2 event-driven simulator ⭐ | L8 | P7 | M18, M81 | | ☑ |
-| **M83** | Order state machine & reconciliation | L8 | P8 | M80 | | ☐ |
+| **M83** | Order state machine & reconciliation | L8 | P8 | M80 | ✅ | ☑ |
 | **M84** | Live broker adapter | L8 | P9 | M83, M76 | | ☐ |
 | **M85** | Stress-scenario suite | L8 | P7 | M82 | | ☑ |
 | **M90** | API gateway & WebSocket | L9 | P8 | M04 | | ☑ |
@@ -222,7 +222,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **MA0** | Orchestration (Prefect) | LX | P5 | M00 | | ☑ |
 | **MA1** | Daily rhythm jobs | LX | P8 | MA0 | | ☑ |
 | **MA2** | Retraining pipeline | LX | P8 | M5A, MA0 | ⚙ | ☑ |
-| **MA3** | Drift monitors | LX | P8 | M94 | ⚙ | ☐ |
+| **MA3** | Drift monitors | LX | P8 | M94 | ✅ | ☑ |
 | **MA4** | CI pipeline | LX | P1 | M18, M43 | | ☐ |
 | **MA5** | Backup & restore | LX | P1 | M16 | | ☐ |
 
@@ -1249,12 +1249,30 @@ pytest tests/replay/test_sim_matches_production.py   # sim and live produce iden
 
 ---
 
-#### M83 · Order state machine & reconciliation
+#### M83 · Order state machine & reconciliation ✅
 **Tasks**
-- [ ] States: `intent → submitted → acked → partial → filled | rejected | cancelled`
-- [ ] Reconciliation against broker positions at startup and every N minutes
-- [ ] Handles: ack lost, duplicate ack, success-but-not-placed, rejection mid-flatten
-- [ ] Immutable audit log shipped off-host
+- [x] States: `intent → submitted → acked → partial → filled | rejected | cancelled`
+- [x] Reconciliation against broker positions at startup and every N minutes
+- [x] Handles: ack lost, duplicate ack, success-but-not-placed, rejection mid-flatten
+- [x] Immutable audit log shipped off-host
+
+**Built** `libs/ms_broker/state.py`, `tests/stress/test_order_states.py` (35 tests).
+
+The lifecycle in the task list is missing the state that does the work. A submit
+that times out has not failed — it is **UNKNOWN**, and both guesses are wrong:
+call it rejected and the retry doubles the position, call it filled and the
+system believes it is hedged while flat. So a timeout goes to UNKNOWN and *only
+reconciliation* may move it out — enforced, not documented.
+
+Reconciliation compares the **union** of both books, never just ours: iterating
+our own positions makes an untracked broker position structurally invisible, and
+that is the one mismatch nothing else counts, flattens or watches. It reports
+and never trades — a broker snapshot can be stale by seconds, and correcting one
+by trading turns a data gap into a real position.
+
+Each of the four guards was mutation-tested (remove the guard, confirm a test
+fails): duplicate-fill dedup, union iteration, the UNKNOWN escape, and the
+flatten that continues past a rejection. All four caught.
 
 **Verify** `pytest tests/stress/test_order_states.py -k "duplicate_ack or lost_ack or reconcile_mismatch"`
 
@@ -1271,11 +1289,18 @@ pytest tests/replay/test_sim_matches_production.py   # sim and live produce iden
 
 ---
 
-#### M85 · Stress-scenario suite
-- [ ] All ten scenarios from blueprint Ch.12 as automated replay tests
-- [ ] Each defines expected behaviour before implementation
+#### M85 · Stress-scenario suite ✅
+- [x] All ten scenarios from blueprint Ch.12 as automated replay tests
+- [x] Each defines expected behaviour before implementation
 
-**Verify** `pytest tests/stress/ -v   # 10/10 pass`
+**Verify** `pytest tests/stress/test_scenarios.py -v   # all ten scenarios`
+
+The original line here read ``pytest tests/stress/ -v   # 10/10 pass`` and is
+now wrong in a way worth naming rather than quietly editing: ``tests/stress/``
+holds 92 tests across three files, so a future reader running it and seeing 92
+would conclude the suite had drifted from the plan. The ten scenarios live in
+``test_scenarios.py`` (16 tests — several scenarios assert more than one thing),
+and that is the file the verify command should point at.
 
 ---
 
@@ -1350,7 +1375,7 @@ pytest tests/unit/test_kill_policy.py -k "auto_disables or requires_change_to_re
 | **MA0** | Orchestration | Prefect flows for nightly/weekly jobs; retries; alerting on failure | `prefect deployment ls` + a forced-failure test |
 | **MA1** | Daily rhythm | 06:30 briefing · 08:45 preflight · session · 15:20 forced flatten · 15:45 post-session · 18:00 nightly | `pytest tests/integration/test_daily_rhythm.py` |
 | **MA2** | Retraining | Weekly incremental, quarterly full; promote only if it beats incumbent on last 4 weeks OOS | `python jobs/retrain.py --dry-run --report` |
-| **MA3** | Drift monitors | Feature PSI, prediction-distribution KL, rolling Brier; breach blocks auto-execution | `pytest tests/unit/test_drift.py -k "psi_breach_blocks_auto"` |
+| **MA3** ✅ | Drift monitors | Feature PSI, prediction-distribution KL, rolling Brier; breach blocks auto-execution | `pytest tests/unit/test_drift.py -k "psi_breach_blocks_auto"` |
 | **MA4** | CI pipeline | On every commit: unit + determinism + parity + leakage lint + AP-hack + stress | CI green badge |
 | **MA5** | Backup & restore | Nightly dump + Parquet sync; **monthly restore drill on a clean machine** | `python jobs/restore_drill.py --target clean-vm` |
 
@@ -1619,7 +1644,7 @@ Sprints are two weeks. Gate references are `docs/gates.md`.
 | S16 | 31–32 | M76 M77 M80 M81 | |
 | S17 | 33–34 | M82 M85 · locked-holdout evaluation | **G7** |
 | S18 | 35–36 | M90 M91 M92 M93 MA0 MA1 | |
-| S19 | 37–38 | M94 MA2 MA3 M83 | |
+| S19 | 37–38 | M94 MA2 MA3 M83 | ✅ complete |
 | S20+ | 39–45 | **live paper trading, 60 sessions** · weekly attribution reviews | **G8** |
 | — | 46+ | M84 · capital ladder R1→R4 | live |
 
