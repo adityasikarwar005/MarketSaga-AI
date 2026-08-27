@@ -488,3 +488,89 @@ calls had no edge to filter.
 A meta-labeller cannot manufacture an edge. It can only stop you paying costs on
 calls that were never going to cover them. Conflating those two is how a filter
 gets shipped on top of a strategy that has nothing underneath it.
+
+---
+
+# Addendum — M75 position sizing, 2026-08-27
+
+The last place before the risk gate where a good idea can be turned into a
+ruinous one.
+
+## Kelly assumes you know p. You do not.
+
+Kelly's derivation maximises long-run growth **given the true probability**. What
+this system has is an estimate from a model fitted on a few thousand rows, and
+the growth-rate curve is roughly flat just below the optimum and falls off a
+cliff just above it — so overestimating the edge costs far more than
+underestimating it. Full Kelly on an estimated p is not aggressive; it is a
+different and much worse bet than the one the formula describes.
+
+Two defences, deliberately separate:
+
+**Fractional Kelly** (0.25 from config) scales the whole answer down.
+
+**A conservative probability** matters more and is the one usually skipped. The
+formula runs on the *lower end* of the model's own interval, not the point
+estimate:
+
+| interval | p used | raw Kelly |
+|---|---|---|
+| none given | 0.58 | 0.264 |
+| 0.58 ± 0.02 | 0.56 | 0.229 |
+| 0.58 ± 0.08 | 0.50 | 0.124 |
+| 0.58 ± 0.14 | 0.44 | 0.018 |
+
+A model saying "0.58, give or take 0.06" is not the same bet as one saying
+"0.58" flatly. Sizing them identically throws away the only thing the interval
+was ever for — and every calibration and conformal check in this project exists
+to produce that interval.
+
+## Odds, not just probability
+
+`f* = (p·b − q) / b`. A debit spread risking 85 to make 115 and a naked long
+risking 100 to make 400 have completely different optimal sizes at the same hit
+rate, and code that assumes even money sizes both as though they were the first.
+Pinned against the closed form `2p − 1` at even odds, because a wrong formula
+still returns plausible-looking fractions.
+
+## Every reduction is named
+
+A size that came out small has to say why. `Modifier` carries a name and a
+reason, and enforces `0 ≤ value ≤ 1` — **a multiplier above one turns a risk
+control into a leverage knob**, and it would be an easy thing to add by accident.
+
+```
+0 lot(s) = 0 at risk (0.00% of 500,000)
+  Kelly 0.1586 -> fractional 0.0396 -> modified 0.0043 -> capped 0.0043
+  x0.733 uncertainty: interval half-width 0.060
+  x0.500 expiry: gamma risk is extreme and the position can invert in minutes
+  x0.500 loss_streak: 3 consecutive losses - halved 1x
+  x0.588 correlation: 1 open, summed correlation 0.70
+```
+
+## Correlation defaults to 0.7, not 0
+
+Sizing each position independently is the most expensive available mistake here.
+Five positions each risking 1.5%, all long the same index through different
+strikes, is not five 1.5% bets — it is one 7.5% bet wearing a diversified
+costume, discovered on the day they all move together. `BookRisk` measures it:
+four strikes on one underlying show **88%** of the naive sum, i.e. almost no
+diversification at all.
+
+Independence is the wrong prior for a book that is, by construction, all on one
+underlying.
+
+## Two messages that had to be told apart
+
+The first version reported "your account is too small for this trade" whenever
+the answer was zero lots. That is correct when the per-trade cap is binding and
+the account cannot afford one lot at it. It is **wrong** when the modifier stack
+is what shrank the budget — the account is fine and the context declined — and
+in that case the message is advice to fund the account in order to override a
+risk control. The two are now distinguished by which constraint was binding.
+
+Rounding is always **down**. A 0.6-lot answer rounded to nearest becomes a
+position 67% larger than intended, through the cap rather than up against it.
+The consequence is that a small account sizes to zero on a normal signal, and
+that is reported rather than swallowed: a silent skip is a bug that looks like a
+quiet day.
