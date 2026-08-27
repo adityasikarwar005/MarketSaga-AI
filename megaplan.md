@@ -157,6 +157,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M13** | Candle builder | L1 | P1 | M12, M02 | | ☑ |
 | **M14** | Option chain snapshotter | L1 | P0 | M11 | | ☑ |
 | **M15** | Cross-asset collector | L1 | P1 | M04 | | ☑ |
+| **M15b** | Daily bar loader (free source) | L1 | P4 | M15 | | ☑ |
 | **M16** | TimescaleDB schema & loaders | L1 | P1 | M03 | | ☑ |
 | **M17** | Parquet archive + DuckDB research layer | L1 | P1 | M16 | | ☑ |
 | **M18** | Replay engine | L1 | P1 | M17, M02, M04 | | ☑ |
@@ -1598,7 +1599,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | Layer | Modules | ☑ Verified | ◐ In progress | ☐ Not started |
 |---|---:|---:|---:|---:|
 | L0 Foundation | 7 | 6 | 1 | 0 |
-| L1 Market Data | 10 | 9 | 1 | 0 |
+| L1 Market Data | 11 | 10 | 1 | 0 |
 | L2 News & Events | 10 | 0 | 0 | 10 |
 | L3 Impact | 6 | 5 | 0 | 1 |
 | L4 Features | 6 | 4 | 1 | 1 |
@@ -1608,7 +1609,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **79** | **27** | **4** | **48** |
+| **Total** | **80** | **28** | **4** | **48** |
 
 ### Gate ledger
 | Gate | Blocks | Status |

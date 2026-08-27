@@ -374,7 +374,7 @@ def make_samples(
                 symbol=s.symbol,
                 instrument_id=s.instrument_id,
                 first=100.0,
-                last=100.0 * (1 + (driver if s.symbol == "GIFT_NIFTY" else rng.gauss(0, 0.004))),
+                last=100.0 * (1 + (driver if s.symbol == "US_EQ_FUT" else rng.gauss(0, 0.004))),
                 bars=100,
                 high=101.0,
                 low=99.0,
@@ -405,7 +405,7 @@ def test_features_come_only_from_the_window(registry, cal):
     assert features["window_hours"] == pytest.approx(window.hours)
     assert features["spans_weekend"] == 0.0
     # A series that did not report is recorded as absent, not as zero movement.
-    assert features["GIFT_NIFTY_seen"] == 0.0
+    assert features["US_EQ_FUT_seen"] == 0.0
 
 
 def test_weekend_window_is_visible_to_the_model(registry, cal):
@@ -428,9 +428,9 @@ def test_forecaster_learns_the_driver(registry, cal):
     model = GapForecaster(registry, epochs=300).fit(samples)
 
     up = dict(samples[0].features)
-    up["GIFT_NIFTY_ret"] = 0.015
+    up["US_EQ_FUT_ret"] = 0.015
     down = dict(samples[0].features)
-    down["GIFT_NIFTY_ret"] = -0.015
+    down["US_EQ_FUT_ret"] = -0.015
 
     hi = model.predict(GapSample(samples[0].session, up, 0.0, 17.0, False))
     lo = model.predict(GapSample(samples[0].session, down, 0.0, 17.0, False))

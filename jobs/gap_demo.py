@@ -61,7 +61,7 @@ def make_sessions(
                 symbol=s.symbol,
                 instrument_id=s.instrument_id,
                 first=100.0,
-                last=100.0 * (1 + (driver if s.symbol == "GIFT_NIFTY" else rng.gauss(0, 0.004))),
+                last=100.0 * (1 + (driver if s.symbol == "US_EQ_FUT" else rng.gauss(0, 0.004))),
                 bars=120,
                 high=101.0,
                 low=99.0,

@@ -128,7 +128,10 @@ class NaiveGapBaseline:
 
     def __init__(
         self,
-        driver: str = "GIFT_NIFTY",
+        # Whichever overnight series is actually available and strongest. With a
+        # live feed that is GIFT Nifty; on free daily bars it is US equity
+        # futures, whose session closes hours before the Indian open.
+        driver: str = "US_EQ_FUT",
         quantiles: Sequence[float] = DEFAULT_QUANTILES,
     ) -> None:
         self.driver = driver

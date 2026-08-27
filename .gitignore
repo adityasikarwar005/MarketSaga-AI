@@ -59,3 +59,9 @@ docs/build/
 data/parquet/
 data/datasets/
 data/.kite_session.json
+
+# Cached daily bars from a public source - regenerate with:
+#   python jobs/gap_backfill.py --fetch
+!data/reference/daily/
+data/reference/daily/*
+!data/reference/daily/*.json
