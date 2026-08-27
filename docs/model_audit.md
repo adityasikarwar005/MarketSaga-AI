@@ -876,3 +876,88 @@ price for, because marking at zero turns a data gap into a loss that looks real.
 Marks come from the mid, not the touch: marking at the liquidation price
 conflates valuation with exit cost, and charging that twice understates every
 open position.
+
+---
+
+# M82 — the event-driven simulator, 2026-08-27
+
+Owns the only number anyone is allowed to quote about profitability.
+
+Every other module can be wrong and produce a *worse* model. This one can be
+wrong and produce a **better-looking** one, which is the failure that ends
+projects. So the whole design is one sentence:
+
+> **A decision made at time T cannot be filled at time T's price.**
+
+Violating that is the most profitable bug in quantitative finance and the hardest
+to see. Nothing errors, nothing looks out of place, and the equity curve simply
+goes up.
+
+## Three delays, kept separate
+
+| delay | why it is its own thing |
+|---|---|
+| **Discovery** — event at T, known at T+3s | A headline is not on your screen the instant it is filed. **Floored at 3s and not configurable to zero** — `SimConfig` raises. |
+| **Decision latency** | Sampled from a log-normal, not assumed constant. The slow decisions happen during bursts, and bursts are when prices move. |
+| **Round trip** | Submission, ack, fill. |
+
+They behave differently under load: discovery does not change when your machine
+is busy, decision latency doubles. Collapsing them into one constant hides that
+**the worst latency arrives at the worst moment**.
+
+Latency is right-skewed on purpose — symmetric noise around a median produces
+fast decisions as often as slow ones, and there is no such thing as a
+negative-latency decision. `from_samples` fits the median and p99 rather than
+mean and standard deviation, because a mean is dragged around by the tail it is
+supposed to summarise, and it **refuses fewer than 30 timings**: an unmeasured
+model is honest, a badly measured one is not.
+
+## Lookahead is refused, not merely discouraged
+
+`book_for_decision` and `book_for_fill` are two separate fetches at two separate
+times, and the second **raises `LookaheadError`** if asked for a price from before
+its own decision. Enforced by construction rather than by care, because care does
+not survive a refactor.
+
+The exit walk only sees bars strictly *after* the fill. A bar already in progress
+when the order arrived has a high and a low that partly predate the position, and
+crediting those is the same lookahead in a smaller costume.
+
+## The report is written to be hard to over-read
+
+```
+190 trades, hit rate 37%
+gross -75  costs 399  net -474 (-0.047% of capital)
+profit factor 0.04   max drawdown 0.047%
+by event class, worst first:
+  corp.earnings         n=78  hit=29%  gross=-55  net=-219  cost drag 296%
+  macro.rate_decision   n=59  hit=39%  gross=-16  net=-140  cost drag 792%
+  geo.military          n=53  hit=45%  gross= -4  net=-115  cost drag 2900%
+```
+
+Attribution is ordered **worst class first** — the number that decides what gets
+disabled belongs at the top, not buried under the winners. `cost_drag` above 1.0
+says the edge never existed.
+
+Net is printed as a fraction of capital as well as in rupees. A net of −474 beside
+a drawdown of "0.0%" reads as a contradiction until you notice the capital is a
+million; printing only one invites the wrong reading.
+
+`tie_broken_share` is reported prominently and **warns above 20%**: a backtest
+whose exits are mostly ties is largely a statement about the tie convention, and
+its profit factor is a property of that choice rather than of the strategy.
+
+And every run prints what would make the number an artefact — an unmeasured
+latency model, the discovery delay being at its floor rather than a real wire,
+and that one equity curve cannot say whether it was luck.
+
+## What the demo actually demonstrates
+
+The synthetic world plants a real directional edge (58% for `geo.military`) and
+costs still eat it: hit rate 45% after the exit rules, cost drag 2900%. That is
+the useful lesson rather than a disappointing one — **a directional edge is not a
+trading edge**, and the gap between them is exactly what M74 and M81 measure.
+
+Synthetic on purpose, and it says so: this job exists before there is intraday
+data, and a demo that pretended otherwise would be the first lie in a module
+built to prevent them.

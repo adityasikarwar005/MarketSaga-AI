@@ -209,7 +209,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M77** | Recommendation assembler | L7 | P7 | M76 | | ☑ |
 | **M80** | Paper broker adapter | L8 | P7 | M77 | | ☑ |
 | **M81** | Fill & slippage model | L8 | P7 | M80 | ⚙ | ☑ |
-| **M82** | L2 event-driven simulator | L8 | P7 | M18, M81 | | ☐ |
+| **M82** | L2 event-driven simulator ⭐ | L8 | P7 | M18, M81 | | ☑ |
 | **M83** | Order state machine & reconciliation | L8 | P8 | M80 | | ☐ |
 | **M84** | Live broker adapter | L8 | P9 | M83, M76 | | ☐ |
 | **M85** | Stress-scenario suite | L8 | P7 | M82 | | ☐ |
@@ -1644,14 +1644,14 @@ Update this table at the end of every sprint. It is the honest picture.
 | L5 Models | 12 | 8 | 0 | 4 |
 | L6 Projection | 3 | 0 | 0 | 3 |
 | L7 Decision | 8 | 4 | 1 | 3 |
-| L8 Execution | 6 | 2 | 0 | 4 |
+| L8 Execution | 6 | 3 | 0 | 3 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **81** | **40** | **3** | **38** |
+| **Total** | **81** | **41** | **3** | **37** |
 
 ### What the module count does not say
 
-**40 of 81 is 49%, and read alone it is misleading in both directions.**
+**41 of 81 is 51%, and read alone it is misleading in both directions.**
 
 *It understates the foundation.* L0 and L1 are effectively finished, and they are
 the layers everything else stands on: point-in-time correctness, deterministic
