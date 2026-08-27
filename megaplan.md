@@ -212,7 +212,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M82** | L2 event-driven simulator ⭐ | L8 | P7 | M18, M81 | | ☑ |
 | **M83** | Order state machine & reconciliation | L8 | P8 | M80 | | ☐ |
 | **M84** | Live broker adapter | L8 | P9 | M83, M76 | | ☐ |
-| **M85** | Stress-scenario suite | L8 | P7 | M82 | | ☐ |
+| **M85** | Stress-scenario suite | L8 | P7 | M82 | | ☑ |
 | **M90** | API gateway & WebSocket | L9 | P8 | M04 | | ☐ |
 | **M91** | Dashboard UI | L9 | P8 | M90 | | ☐ |
 | **M92** | Alerting | L9 | P8 | M90 | | ☐ |
@@ -1644,14 +1644,14 @@ Update this table at the end of every sprint. It is the honest picture.
 | L5 Models | 12 | 8 | 0 | 4 |
 | L6 Projection | 3 | 0 | 0 | 3 |
 | L7 Decision | 8 | 4 | 1 | 3 |
-| L8 Execution | 6 | 3 | 0 | 3 |
+| L8 Execution | 6 | 4 | 0 | 2 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **81** | **41** | **3** | **37** |
+| **Total** | **81** | **42** | **3** | **36** |
 
 ### What the module count does not say
 
-**41 of 81 is 51%, and read alone it is misleading in both directions.**
+**42 of 81 is 52%, and read alone it is misleading in both directions.**
 
 *It understates the foundation.* L0 and L1 are effectively finished, and they are
 the layers everything else stands on: point-in-time correctness, deterministic

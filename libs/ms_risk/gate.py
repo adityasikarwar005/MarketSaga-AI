@@ -59,6 +59,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import IntEnum
+from typing import Protocol
 
 from libs.ms_core.config import RiskLimits
 from libs.ms_core.obs import get_logger
@@ -489,9 +490,23 @@ class FlattenResult:
         return "\n".join(lines)
 
 
-def flatten_all(
-    positions: Sequence[Position],
-    close: Callable[[Position], None],
+class Closeable(Protocol):
+    """The only thing a flatten needs to know about a position: what to call it.
+
+    A protocol rather than a concrete class because the flatten path must work
+    with whatever object the caller already has - the broker's position, the
+    gate's, a reconciliation record. Demanding one specific type would force a
+    conversion at the exact moment the system is failing, which is the worst
+    possible time to be constructing objects.
+    """
+
+    @property
+    def symbol(self) -> str: ...
+
+
+def flatten_all[P: Closeable](
+    positions: Sequence[P],
+    close: Callable[[P], None],
     *,
     max_attempts: int = 3,
     on_failure: Callable[[FlattenResult], None] | None = None,
@@ -514,7 +529,7 @@ def flatten_all(
 
     for attempt in range(1, max_attempts + 1):
         result.attempts = attempt
-        still_open: list[Position] = []
+        still_open: list[P] = []
         for position in remaining:
             try:
                 close(position)

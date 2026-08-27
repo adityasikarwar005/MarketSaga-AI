@@ -961,3 +961,65 @@ trading edge**, and the gap between them is exactly what M74 and M81 measure.
 Synthetic on purpose, and it says so: this job exists before there is intraday
 data, and a demo that pretended otherwise would be the first lie in a module
 built to prevent them.
+
+---
+
+# M85 — the ten scenarios, end to end, 2026-08-27
+
+M76 already ran these ten against the risk gate. This is a different question and
+the more important one.
+
+**A gate deciding correctly and the system behaving correctly are not the same
+claim.** A gate can escalate to L3 while nothing actually flattens. It can refuse
+a trade that was already sent. It can be consulted *after* the position was
+opened. Every one of those passes a gate test and fails in production, because
+the defect is in the wiring rather than in the rule.
+
+So these drive the whole chain — event, gate, broker, account — and every
+assertion is about **what the account looks like afterwards**, not about a
+verdict.
+
+## What the end-to-end version catches that the gate version could not
+
+| | gate test asks | scenario test asks |
+|---|---|---|
+| 1 — circuit breaker | did it escalate to L3? | **is the account flat?** |
+| 1b — broker refuses | — | does a failed flatten report failure, or claim success? |
+| 4 — duplicate ack | — | is the position doubled? |
+| 5 — stale chain | is it L2 not L3? | **did the existing position survive?** |
+| 8 — forced flatten | is a new entry refused? | **is everything actually closed?** |
+| 10 — stale model | is it L1? | did the position survive *and* the new one get halved? |
+
+Scenario 1 is the clearest: escalating to L3 and *being flat* are different
+states, and only one of them is safe. A gate test cannot tell them apart because
+it never touches an account.
+
+And one that only exists here: `test_the_harness_asks_the_gate_before_the_broker`.
+A system that places the order and then asks is a system whose risk gate is a
+logger.
+
+## Two guards on the suite itself
+
+`test_every_scenario_has_a_test` fails when a scenario is added to the list and
+forgotten. A stress suite that silently covers nine of ten is worse than one that
+covers nine and says so.
+
+`test_every_scenario_states_its_expectation` requires each scenario to carry its
+expected behaviour as data, and to state it in more than a few words. A scenario
+whose expectation is written *after* watching what the code does is a description
+of a bug, phrased as a requirement.
+
+## A design smell fixed on the way
+
+`flatten_all` demanded `ms_risk.gate.Position`, and the paper broker has its own
+`ms_broker.protocol.Position` — two types with the same name, structurally
+different (one carries delta and vega, the other average price and realised P&L).
+
+The flatten path only ever reads `.symbol`. Demanding a concrete type would force
+a conversion **at the exact moment the system is failing**, which is the worst
+possible time to be constructing objects. It now takes a `Closeable` protocol —
+anything with a symbol — so the caller passes whatever it already has.
+
+Where a real conversion is needed (broker positions into the gate's book state)
+it is explicit and commented: the greeks are dropped because the broker does not
+know them and **must not invent zeros that read as real exposure**.
