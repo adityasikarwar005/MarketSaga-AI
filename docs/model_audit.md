@@ -1338,3 +1338,108 @@ remembers agreeing to.
 Only **resolved** entries are attributed. Counting unresolvable ones as zeros
 would dilute every average toward nothing and make a class with missing outcomes
 look *safer* than one that was actually measured.
+
+---
+
+# MA2 + M5A — retraining and the promotion gate, 2026-08-28
+
+MA2 depends on M5A, which was not built. Rather than inventing a registry inline,
+M5A's **stage machine and promotion gate** are built here and MLflow/ONNX serving
+are deferred — the same call made for Prefect, for the same reason: the part with
+correctness requirements must be testable without standing up a service.
+
+M5A is marked **partial**, not done, because that is what it is.
+
+## The rule, and why every word is load-bearing
+
+> promote only if it beats the incumbent on the last four weeks out-of-sample
+
+**"Beats the incumbent", not "is good."** The incumbent is already live and costs
+nothing to keep. A challenger that is merely acceptable is a change with all of
+the risk and none of the benefit — and the natural question, *"is the new model
+good?"*, has no way to answer that.
+
+**"Out-of-sample", with the challenger defining the boundary.** The window starts
+the day after the challenger's last training day. Defining it from *today*
+instead would let a model trained through last Friday be scored on last Thursday,
+and the win would be large, clean and entirely fake.
+
+The incumbent is then scored on the same window — which is out-of-sample for it
+too, but *further* from its training set. That asymmetry is correct and worth
+naming: it is exactly the question that matters, because holding up on
+increasingly distant data is what the incumbent will keep having to do if nothing
+changes.
+
+**"Four weeks", not two.** The challenger was fitted up to the start of the
+window; a shorter one is mostly the tail of its training set, where any model
+looks excellent.
+
+## What the gate refuses
+
+Every blocker is reported, not just the first — a challenger that fails on three
+counts and is fixed for one comes back and fails on the other two, and each round
+trip is a week.
+
+- not in **shadow**, or fewer than 15 shadow sessions. Shadow is the only stage
+  producing evidence nobody chose: live predictions, recorded, trading nothing.
+- a scoring window that **overlaps its own training data**
+- fewer than 200 out-of-sample predictions — below that the comparison is noise
+  whatever it says
+- the incumbent **not scored**, or scored on a *different window*: a challenger
+  compared against nothing wins every time
+- an improvement below 0.005 log-loss. **A challenger ahead by a thousandth has
+  won a coin toss**, and promoting on it means promoting every week for no reason
+
+## Every retrain is a trial, win or lose
+
+Fifty-two retrains a year is fifty-two attempts at beating the incumbent, and one
+that wins in that sequence has not necessarily found anything. `retrain` writes
+to the experiment log **whether or not it promotes** — a trial count that includes
+only the winners is not a trial count, and every deflated statistic downstream
+reads it.
+
+## Registry invariants
+
+- **One live model.** Two means predictions come from whichever the caller
+  happened to load, and attribution is meaningless.
+- **Nothing live is a state, not an error** — day one and post-emergency-archive
+  are both real, and a caller forced to catch an exception will eventually catch
+  it and continue. But `production_model` *refuses* rather than falling back:
+  a system trading on a default model is one whose operator does not know what it
+  is trading on.
+- **Promotion takes the check rather than performing it**, so the decision and
+  the action are separable — and a check for a *different* model is refused,
+  because promoting on someone else's evidence is how the wrong model goes live.
+- **Shadow cannot be restarted.** It would reset a session count that is meant to
+  be evidence.
+- **Archiving needs a reason.** The reason a model was pulled is the most useful
+  thing about it later.
+- **Every prediction is stamped with its version.** A week mixing two versions and
+  reporting one hit rate is reporting a number about nothing, and the mixing is
+  invisible — it looks exactly like a single-model week.
+
+## A small bug in my own tracker update
+
+The tracker script marked MA2 partial instead of done, because the condition was
+`"M5A" in old` and MA2's row contains `M5A` **in its dependency column**. Same
+class as everything else in this document: a substring test that matched
+somewhere unintended, produced a plausible result, and raised nothing.
+
+## R6 caught me again
+
+`test_no_wall_clock_calls_outside_clock_module` failed on `retrain.py`, which
+stamped its experiment-log entry with `datetime.now(UTC)`. Second time in one
+session — the API gateway was the first.
+
+The consequence here is specific: a retrain replayed over a past quarter would
+stamp every trial with **today's** date, and the experiment log would then show
+fifty-two attempts that all happened on one afternoon. The trial count would
+survive; the chronology, which is what makes it auditable, would not.
+
+Fixed by injecting the clock, and `ms_ops` now carries its own guard so the
+failure surfaces beside the code rather than in a distant architectural test.
+
+Two hits from the same rule in one session is worth noting rather than
+brushing past. The rule is not fussy — it is load-bearing in a project whose
+entire correctness story is point-in-time, and I keep reaching for the wall
+clock because it is what one reaches for.

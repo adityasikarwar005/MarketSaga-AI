@@ -195,7 +195,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M57** | Meta-labeller (post-cost, threshold from loss ratio) | L5 | P5 | M53, M74 | ⚙ | ☑ |
 | **M58** | Sequence models (TCN / transformer) | L5 | P6 | M51, M13 | ⚙ | ⊘ |
 | **M59** | Ensemble, calibration, conformal | L5 | P5 | M53, M55 | ⚙ | ☑ |
-| **M5A** | Model registry & ONNX serving | L5 | P5 | M59 | | ☐ |
+| **M5A** | Model registry & ONNX serving (stages + gate done; MLflow/ONNX deferred) | L5 | P5 | M59 | | ◐ |
 | **M60** | Path sampler | L6 | P6 | M55, M54 | ⚙ | ☐ |
 | **M61** | Fan-chart producer | L6 | P6 | M60 | | ☐ |
 | **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | | ☐ |
@@ -221,7 +221,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M95** | Morning briefing product | L9 | P4 | M35 | | ☐ |
 | **MA0** | Orchestration (Prefect) | LX | P5 | M00 | | ☑ |
 | **MA1** | Daily rhythm jobs | LX | P8 | MA0 | | ☑ |
-| **MA2** | Retraining pipeline | LX | P8 | M5A, MA0 | ⚙ | ☐ |
+| **MA2** | Retraining pipeline | LX | P8 | M5A, MA0 | ⚙ | ☑ |
 | **MA3** | Drift monitors | LX | P8 | M94 | ⚙ | ☐ |
 | **MA4** | CI pipeline | LX | P1 | M18, M43 | | ☐ |
 | **MA5** | Backup & restore | LX | P1 | M16 | | ☐ |
@@ -1641,17 +1641,17 @@ Update this table at the end of every sprint. It is the honest picture.
 | L2 News & Events | 10 | 0 | 0 | 10 |
 | L3 Impact | 6 | 5 | 0 | 1 |
 | L4 Features | 6 | 4 | 1 | 1 |
-| L5 Models | 12 | 8 | 0 | 4 |
+| L5 Models | 12 | 8 | 1 | 3 |
 | L6 Projection | 3 | 0 | 0 | 3 |
 | L7 Decision | 8 | 4 | 1 | 3 |
 | L8 Execution | 6 | 4 | 0 | 2 |
 | L9 Surface | 6 | 4 | 0 | 2 |
-| LX Ops | 6 | 2 | 0 | 4 |
-| **Total** | **81** | **48** | **3** | **30** |
+| LX Ops | 6 | 3 | 0 | 3 |
+| **Total** | **81** | **49** | **4** | **28** |
 
 ### What the module count does not say
 
-**48 of 81 is 59%, and read alone it is misleading in both directions.**
+**49 of 81 is 60%, and read alone it is misleading in both directions.**
 
 *It understates the foundation.* L0 and L1 are effectively finished, and they are
 the layers everything else stands on: point-in-time correctness, deterministic
