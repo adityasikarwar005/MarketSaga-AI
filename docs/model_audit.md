@@ -574,3 +574,92 @@ position 67% larger than intended, through the cap rather than up against it.
 The consequence is that a small account sizes to zero on a normal signal, and
 that is reported rather than swallowed: a silent skip is a bug that looks like a
 quiet day.
+
+---
+
+# Addendum — M76 risk gate and kill switches, 2026-08-27
+
+The module that sits between the brain and the money. All ten blueprint stress
+scenarios are automated in `tests/stress/test_risk_gate.py`, each one naming its
+expected behaviour **before** the implementation — a scenario test whose
+expectation is written after watching what the code does is a description, not a
+test.
+
+## Deny by default
+
+The gate starts from reject and requires every check to pass. Starting from
+allow and rejecting on breach **fails open**: a bug in a check silently permits
+the trade it was written to stop. For the one component whose job is to say no,
+that is the difference between a missing check being a missing veto and a
+missing check being an unlimited allowance.
+
+## Flatten cannot depend on what failed
+
+The reason to flatten is usually that something broke. A flatten path that needs
+the model server, the feature store or the feed does not work on the day it is
+needed — and it passes every test written against a healthy system.
+
+`flatten_all` takes a callable and a list of positions. Nothing else. There is a
+test that parses the module's imports and fails if `ms_models`, `ms_features`,
+`ms_data` or `ms_broker` ever appear.
+
+It also assumes the broker will fight back, because "the broker API returns an
+error during the flatten" is the scenario that actually costs money:
+
+- each position is retried **independently** — a single try/except around the
+  loop would leave every position after the first error open, and the log would
+  show one failure instead of all of them
+- a position that closed is never retried, so a duplicate acknowledgement cannot
+  become a second order in the opposite direction
+- what could not be closed is **returned**, not logged and forgotten. A flatten
+  that reports success while a position is open is worse than one that fails
+  loudly, because the operator stops looking
+
+## Escalation is automatic, de-escalation is not
+
+The kill level never falls on its own. A feed that comes back does not undo the
+fact that it went away with a position open.
+
+Two L3 events in a week become an L4 lockout — the second one is evidence the
+first was not understood — and clearing a lockout **requires a written
+root-cause note**. The failure being prevented is a system that recovers by
+itself and takes the same loss again on the same undiagnosed cause. That is not
+hypothetical; it is what happens when clearing is one keypress.
+
+## The bug: a soft kill became a hard stop
+
+L1 is "reduce size by half; notify" — explicitly not a stop. But a 4-lot trade
+capped down to 1 lot, then halved by L1, produced **zero lots and a rejection**.
+
+For any account whose positions are already at the minimum tradeable size, that
+silently converts the mildest kill level into the most severe one. At one lot
+there is no half; the choices are one or none, and L1 says one.
+
+The trade now stands and the warning says plainly that the reduction could not
+be expressed — *"L1 soft kill could NOT reduce size — already at one lot. The
+soft kill is in force but is not shrinking anything."* An operator whose soft
+kill is not actually reducing anything needs to know that, and a silent
+rejection tells them the opposite.
+
+## The drill
+
+`python tasks.py kill-drill` runs against a broker that **fails on purpose** —
+one position times out and recovers, one refuses permanently. A drill against a
+cooperative broker proves the drill runs, not that the flatten does.
+
+It exercises: escalate on a dead feed → flatten → discover what did not close →
+escalate again → two L3s become a lockout → the lockout refuses to clear without
+a written cause. Results append to `research/kill_drills.jsonl`, versioned like
+the trial log, for the same reason.
+
+## Limit changes need a decision record
+
+A risk limit that can be edited in a commit is one that gets edited at the worst
+moment — after a losing week, by the person who lost it, with a reason that
+sounds convincing at the time. `limit_change_requires_adr` reports which changed
+fields have no record.
+
+The ADR template asks two questions that are easy to skip: **what this makes
+worse**, and **how we would know it was a mistake**. If the first is empty the
+change has not been thought through — a limit with only upside was set wrong
+originally, and that is the decision to write down instead.

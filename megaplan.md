@@ -205,7 +205,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M73** | Monte Carlo P&L engine | L7 | P7 | M72, M60, M56 | | ☐ |
 | **M74** | Cost model (PIT rates, STT bases, slippage) | L7 | P7 | M01 | | ☑ |
 | **M75** | Position sizing (fractional Kelly on a lower bound) | L7 | P7 | M59, M74 | | ☑ |
-| **M76** | Risk gate & kill switches | L7 | P7 | M75 | | ☐ |
+| **M76** | Risk gate & kill switches ⭐ | L7 | P7 | M75 | | ☑ |
 | **M77** | Recommendation assembler | L7 | P7 | M76 | | ☐ |
 | **M80** | Paper broker adapter | L8 | P7 | M77 | | ☐ |
 | **M81** | Fill & slippage model | L8 | P7 | M80 | ⚙ | ☐ |
@@ -1647,7 +1647,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **81** | **35** | **4** | **42** |
+| **Total** | **81** | **36** | **4** | **41** |
 
 ### Gate ledger
 | Gate | Blocks | Status |

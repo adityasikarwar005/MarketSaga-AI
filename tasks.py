@@ -173,6 +173,11 @@ def trials() -> None:
     run(_py(), "jobs/experiment_log.py", *sys.argv[2:], check=False)
 
 
+def kill_drill() -> None:
+    """The monthly drill. A kill switch never pulled is one nobody knows."""
+    run(_py(), "jobs/kill_drill.py", *(sys.argv[2:] or ["--dry-run"]), check=False)
+
+
 def qc() -> None:
     """Data quality gates. A FAIL blocks research on that day, by design."""
     run(_py(), "jobs/qc.py", *(sys.argv[2:] or ["--all"]), check=False)
@@ -315,6 +320,7 @@ COMMANDS = {
     "research": research,
     "gap": gap,
     "trials": trials,
+    "kill-drill": kill_drill,
     "replay": replay,
     "migrate": migrate,
     "record": record,
