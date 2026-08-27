@@ -219,8 +219,8 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M93** | Paper ledger & outcome resolver | L9 | P8 | M80 | | ☑ |
 | **M94** | Attribution & calibration reports | L9 | P8 | M93 | | ☐ |
 | **M95** | Morning briefing product | L9 | P4 | M35 | | ☐ |
-| **MA0** | Orchestration (Prefect) | LX | P5 | M00 | | ☐ |
-| **MA1** | Daily rhythm jobs | LX | P8 | MA0 | | ☐ |
+| **MA0** | Orchestration (Prefect) | LX | P5 | M00 | | ☑ |
+| **MA1** | Daily rhythm jobs | LX | P8 | MA0 | | ☑ |
 | **MA2** | Retraining pipeline | LX | P8 | M5A, MA0 | ⚙ | ☐ |
 | **MA3** | Drift monitors | LX | P8 | M94 | ⚙ | ☐ |
 | **MA4** | CI pipeline | LX | P1 | M18, M43 | | ☐ |
@@ -1646,12 +1646,12 @@ Update this table at the end of every sprint. It is the honest picture.
 | L7 Decision | 8 | 4 | 1 | 3 |
 | L8 Execution | 6 | 4 | 0 | 2 |
 | L9 Surface | 6 | 3 | 0 | 3 |
-| LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **81** | **45** | **3** | **33** |
+| LX Ops | 6 | 2 | 0 | 4 |
+| **Total** | **81** | **47** | **3** | **31** |
 
 ### What the module count does not say
 
-**45 of 81 is 56%, and read alone it is misleading in both directions.**
+**47 of 81 is 58%, and read alone it is misleading in both directions.**
 
 *It understates the foundation.* L0 and L1 are effectively finished, and they are
 the layers everything else stands on: point-in-time correctness, deterministic

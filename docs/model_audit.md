@@ -1179,3 +1179,87 @@ completely correct.
 The clock is now injected into `create_app`, and a test in the API's own file
 asserts the module has no wall-clock reads, so the failure surfaces next to the
 code rather than in a distant architectural test.
+
+---
+
+# MA0 + MA1 — the daily rhythm, 2026-08-28
+
+Seven jobs at seven times. **Six can fail and be retried tomorrow. One cannot**,
+and most of these two modules exist because of that one.
+
+## The forced flatten is not a scheduled job
+
+15:20 squares off every intraday position, no exceptions. Treating it as one
+entry in a job list makes it as skippable as the nightly archive, and the failure
+modes are not comparable: a missed archive costs a rerun, a missed flatten
+**carries a position overnight through a gap nobody modelled**.
+
+Three rules follow that nothing else gets:
+
+- it runs **even when every earlier job failed** — a broken preflight is a reason
+  to hold no position, not a reason to keep one;
+- a missed window is an **incident**, not a skipped job;
+- it cannot be disabled by configuration. A flag that turns it off is a flag
+  someone sets during a debugging session on a Tuesday.
+
+## The missed window is the interesting case
+
+If the process was down from 15:00 to 16:00, the flatten never fired. A naive
+scheduler does one of two things and **both are wrong**: run it late — squaring
+off at 16:00 into a shut market where the order will not fill — or skip it,
+leaving the position open overnight and reporting a clean run.
+
+Neither is safe alone, so a missed critical job becomes an alert **plus a
+position check**. That is the only response that distinguishes *the moment passed
+harmlessly* from *something is still open*, and it is why `positions_open` is
+injected: the runner cannot answer that question itself, and assuming either way
+is wrong. Assuming open cries wolf every weekend; assuming flat is how a position
+spends the night unnoticed.
+
+A missed flatten with a flat book is still recorded. **A flatten that keeps not
+running is a fault even on the days it happens not to matter.**
+
+## Ordering is a dependency, not a time
+
+Post-session runs after the flatten because it computes outcomes for positions
+the flatten closed — not because 15:45 is later than 15:20. Encoded as a time, a
+slow flatten produces attribution over positions that are still open and the
+numbers look fine.
+
+And a job whose dependency failed is **skipped with a reason, not failed**.
+Counting it as a failure buries the one thing that actually broke under the six
+that followed it, and the post-mortem then starts in the wrong place.
+
+Preflight has **zero retries** on purpose: a retried preflight is a preflight
+nobody read. The first failure is the signal, and quietly succeeding on the
+second attempt hides that the feed took two tries to connect on the morning it
+later dropped mid-session. The flatten has three, because there the retry *is*
+the point — the broker returning an error is the expected case.
+
+## A deliberate deviation from the plan
+
+The plan says "Prefect flows". This puts the semantics in plain Python and makes
+Prefect a deployment adapter, for a stated reason: the part of orchestration with
+correctness requirements is *which job runs, after what, and what happens when
+one is missed*, and a missed flatten carries overnight risk. That logic has to be
+testable without standing up a workflow engine and must not change behaviour when
+the engine is upgraded.
+
+The engine gets what it is good at — cron, UI, history — and does not get the job
+of deciding whether it is safe to skip a flatten. A test asserts the suite never
+imports Prefect at all.
+
+## The bug: naive times against an aware clock
+
+`scheduled_for` returned `datetime.combine(day, self.at)` — **naive** — and the
+Clock reports timezone-aware UTC. Comparing them raised `TypeError`, which is the
+lucky outcome.
+
+The unlucky one is worse and nearly happened: the rhythm's times are
+**exchange-local IST**, so a naive comparison that *did* succeed would be off by
+five and a half hours and fire the forced flatten at **20:50 IST** — hours after
+the market shut, into a book that had been open the whole evening.
+
+`scheduled_for` is now timezone-aware in `Asia/Kolkata`, and three tests pin it:
+that the offset is +05:30, that 15:20 IST is 09:50 UTC, and that every job in the
+table schedules to an aware instant.
