@@ -195,3 +195,87 @@ regularisation.
 
 `tests/ml/test_no_signal.py` now holds the null tests permanently, one per
 defect, so none of them can come back quietly.
+
+---
+
+# Addendum — the direction model, 2026-08-27
+
+The same null test applied to new code, before it went anywhere near real data.
+
+`libs/ms_models/trees.py` is a from-scratch gradient booster: Newton boosting on
+the log loss, histogram-binned splits, depth chosen on an inner split, and the
+tree count decided by early stopping rather than a constant. Boosted trees, not
+a neural network, because on tabular features with a few hundred to a few
+hundred thousand rows the choice is not close. Deep learning earns its place in
+this project on sequences and on text — raw candle paths and news — which are
+separate modules with separate data requirements.
+
+## What the null test caught
+
+**A booster memorises noise far better than a linear model can.** Random labels,
+30 random features:
+
+| | trees grown | train skill | test skill |
+|---|---|---|---|
+| early stopping on (default) | **8** | — | −0.6% |
+| guard removed | 400 | **+70.4%** | −20.4% |
+
+Seventy percent apparent skill, on labels that were coin flips. That is the
+clearest single illustration of overfitting anywhere in this project, and the
+reason the tree count is not allowed to be a constant.
+
+**Two defects in code written today**, both found by asking what the model says
+when there is nothing to say.
+
+*Isotonic calibration manufactured certainty.* Plain pool-adjacent-violators on
+400 rows of noise produced nine blocks, six of them valued at exactly 0.0 or
+1.0 — and it improved log loss while doing so. Same family as the zero-width
+credible interval fixed earlier in the impact module: perfect confidence from a
+handful of rows.
+
+*Calibration invented an opinion the model did not have.* Even with blocks
+merged and smoothed, a booster whose raw output spanned [0.475, 0.496] came out
+spanning [0.046, 0.659] — a thirty-fold amplification of nothing.
+
+The second is the more instructive. Shrinking the blocks harder did narrow it,
+but cost real accuracy when there *was* a signal, which is the wrong trade. The
+fault was upstream: isotonic corrects the *levels* of a ranking and takes the
+ranking itself on trust. Given a model with no ranking ability, a monotone map
+fitted to noise produces confident-looking probabilities out of nothing.
+
+So calibration is now gated on discrimination — Mann-Whitney against its own
+null — and skipped entirely when there is none, which is also the honest answer:
+a model that cannot rank should report the base rate.
+
+The gate had to be a real significance level. One standard error passes on noise
+about a third of the time, and left the null case still opining 0.30 away from a
+coin flip. Two standard errors is the ordinary 5% bar:
+
+| | with a real signal | random labels |
+|---|---|---|
+| AUC | 0.784 | 0.504 |
+| Brier skill | +0.209 | — |
+| skill vs base rate | — | **+0.00%** |
+| widest opinion | — | **0.016** (was 0.304) |
+| ECE after calibration | 0.0124 | calibration skipped |
+| reliability slope | 1.11 | — |
+
+## Also built in
+
+- **Column order is stored, not inherited from a dict.** A model that iterates a
+  mapping is one ordering change away from scoring the wrong columns with the
+  training run still green.
+- **Missing is a value, not a zero.** Filling an absent feature with 0.0 claims
+  it was average. Absence goes to the trees as a sentinel a split can isolate,
+  with an indicator column when it is common, and confidence falls in proportion
+  to how much of the vector is missing.
+- **Timeout labels are dropped from fitting, kept in scoring.** A barrier never
+  touched is not a direction; coding it as either class teaches something that
+  did not happen. But a model confident when nothing happened should still pay
+  for that confidence.
+- **The edge is capped.** A short-horizon direction call on an index claiming
+  90% is describing a bug.
+
+Everything here runs on synthetic data with a known answer. Real numbers wait on
+a broker feed — and when it arrives, the model class is a swap behind `Model`,
+not a rewrite.

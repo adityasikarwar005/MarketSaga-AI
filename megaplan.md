@@ -188,12 +188,12 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M50** | Label builder (triple barrier) | L5 | P5 | M13, M44 | | ☑ |
 | **M51** | CV harness (purged / embargo / CPCV) | L5 | P5 | M50 | | ☑ |
 | **M52** | M0 rules baseline | L5 | P5 | M34, M44 | | ☑ |
-| **M53** | Direction model | L5 | P5 | M51 | ⚙ | ☐ |
+| **M53** | Direction model (boosted trees + isotonic) | L5 | P5 | M51 | ⚙ | ☑ |
 | **M54** | Quantile model | L5 | P6 | M51 | ⚙ | ☐ |
 | **M55** | Volatility model | L5 | P5 | M51 | ⚙ | ☐ |
 | **M56** | IV-change model | L5 | P7 | M51, M70 | ⚙ | ☐ |
 | **M57** | Meta-labeller | L5 | P5 | M53 | ⚙ | ☐ |
-| **M58** | Sequence models (TCN / transformer) | L5 | P6 | M51 | ⚙ | ⊘ |
+| **M58** | Sequence models (TCN / transformer) | L5 | P6 | M51, M13 | ⚙ | ⊘ |
 | **M59** | Ensemble, calibration, conformal | L5 | P5 | M53, M55 | ⚙ | ☐ |
 | **M5A** | Model registry & ONNX serving | L5 | P5 | M59 | | ☐ |
 | **M60** | Path sampler | L6 | P6 | M55, M54 | ⚙ | ☐ |
@@ -957,6 +957,42 @@ python jobs/experiment_log.py --verify    # chain intact = no run was quietly de
 #### M57 · Meta-labeller ⚙ → card **[AI-12]**
 #### M58 · Sequence models ⚙ → card **[AI-13]** *(deferred until M53 is beaten)*
 
+**Where deep learning and RL belong in this project, and where they do not.**
+
+Both were considered for M53 and both were rejected there on evidence, not
+preference. The record is here so the decision is re-openable rather than
+re-argued.
+
+*Not the gap forecaster.* The regularisation sweep in `docs/model_audit.md`
+improves monotonically to a plateau where the feature weights are essentially
+zero - the data is telling us the daily cross-asset features carry almost
+nothing. A neural network is more capacity applied to the same absent signal,
+which is the failure this project keeps catching, not the fix for it.
+
+*Not the direction model, for now.* On tabular features at a few hundred to a
+few hundred thousand rows, gradient boosted trees beat neural networks
+consistently and by enough that the choice is not close. M53 is boosted trees
+for that reason. When it is beaten, this is the module that beats it.
+
+*Sequences (this module).* A TCN or a small transformer over raw candle paths is
+the honest case for deep learning here: the pattern is in the ordering and the
+shape, which is exactly what hand-built features throw away. It needs intraday
+history that does not exist yet, and it needs M53 as the thing to beat -
+otherwise there is no way to tell whether the extra machinery bought anything.
+
+*Text (M27).* Classifying a headline into an event class is the one place in
+this system where a pretrained transformer is straightforwardly the right tool
+and nothing else comes close. Blocked on the news collectors (M21-M25).
+
+*Reinforcement learning (M75, sizing and execution).* Sequential decisions with
+a reward is genuinely RL's shape. It is also the single most backtest-overfitting
+-prone technique in quantitative finance: an RL agent will learn the simulator,
+including its bugs, and report a beautiful equity curve for behaviour that
+cannot survive a real fill. It is not attempted before the L2 event-driven
+simulator (M82) and the stress suite (M85) exist, and when it is, the null test
+is the same as everywhere else - an agent trained on shuffled returns must learn
+nothing.
+
 Shared tasks for all of the above:
 - [ ] Train through M51 only — no ad-hoc `train_test_split` anywhere
 - [ ] Log to MLflow: params, metrics, dataset version, feature list, config hash
@@ -1611,7 +1647,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **81** | **29** | **4** | **48** |
+| **Total** | **81** | **30** | **4** | **47** |
 
 ### Gate ledger
 | Gate | Blocks | Status |

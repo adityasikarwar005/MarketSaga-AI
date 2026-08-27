@@ -279,3 +279,125 @@ def test_nothing_looks_significant_when_nothing_differs():
             flagged += shrink(s, fm, fs, family_size=len(stats)).excludes_zero
 
     assert flagged / total <= 0.05, f"{flagged}/{total} classes looked real ({flagged / total:.1%})"
+
+
+# ------------------------------------------------------------ boosted trees
+def noisy(n: int, seed: int, p: int = 30):
+    """Random features, random labels. There is nothing here to learn."""
+    rng = random.Random(seed)
+    return (
+        [[rng.gauss(0, 1) for _ in range(p)] for _ in range(n)],
+        [rng.randint(0, 1) for _ in range(n)],
+    )
+
+
+def test_boosted_trees_stop_early_on_random_labels():
+    """A booster will memorise noise better than any linear model can, which is
+    why the early stop is not a convenience. Unguarded it reaches +70% skill on
+    the training set and -20% on held-out data, from labels it invented."""
+    from libs.ms_models.trees import GradientBoostedTrees
+
+    grown = []
+    for seed in range(6):
+        rows, labels = noisy(600, seed)
+        model = GradientBoostedTrees().fit(rows, labels)
+        grown.append(len(model.trees))
+
+    assert max(grown) < 100, f"grew {max(grown)} trees on pure noise (cap is 400)"
+
+
+def test_boosted_trees_claim_no_skill_on_random_labels():
+    from libs.ms_models.trees import GradientBoostedTrees, log_loss
+
+    skills = []
+    for seed in range(6):
+        rows, labels = noisy(600, seed)
+        test_rows, test_labels = noisy(300, 100 + seed)
+        model = GradientBoostedTrees().fit(rows, labels)
+        base = log_loss([sum(labels) / len(labels)] * len(test_labels), test_labels)
+        got = log_loss(model.predict_all(test_rows), test_labels)
+        skills.append((base - got) / base)
+
+    assert max(skills) < 0.02, f"found {max(skills):.1%} skill in random labels"
+
+
+def test_the_early_stop_is_what_prevents_it():
+    """The guard has to be doing the work. If this passes with validation
+    disabled, the discipline is coming from somewhere else and the next change
+    to that somewhere else removes it silently."""
+    from libs.ms_models.trees import GradientBoostedTrees, log_loss
+
+    rows, labels = noisy(600, 3)
+    unguarded = GradientBoostedTrees(validation_share=0.0, n_estimators=300).fit(rows, labels)
+    base = log_loss([sum(labels) / len(labels)] * len(labels), labels)
+    train_skill = (base - log_loss(unguarded.predict_all(rows), labels)) / base
+
+    assert train_skill > 0.3, (
+        "an unguarded booster failed to memorise random labels, so this test is "
+        "no longer demonstrating what it claims to"
+    )
+    assert len(unguarded.trees) > len(GradientBoostedTrees().fit(rows, labels).trees)
+
+
+def test_boosted_trees_do_find_a_real_signal():
+    """The discipline must not have cost it the ability to learn."""
+    import math
+
+    from libs.ms_models.trees import GradientBoostedTrees, log_loss
+
+    rng = random.Random(0)
+
+    def sample(n: int):
+        rows, labels = [], []
+        for _ in range(n):
+            r = [rng.gauss(0, 1) for _ in range(8)]
+            z = 1.2 * r[0] - 0.9 * r[1] + 0.7 * r[0] * r[1]
+            rows.append(r)
+            labels.append(1 if rng.random() < 1 / (1 + math.exp(-z)) else 0)
+        return rows, labels
+
+    rows, labels = sample(800)
+    test_rows, test_labels = sample(400)
+    model = GradientBoostedTrees().fit(rows, labels)
+
+    got = log_loss(model.predict_all(test_rows), test_labels)
+    assert got < 0.60, f"test log loss {got:.3f} against a coin flip's 0.693"
+
+    # The interaction term means the two real features must dominate the splits.
+    top = list(model.feature_importance())[:2]
+    assert set(top) == {0, 1}, f"the splits went to {top}, not the features carrying the signal"
+
+
+def test_a_booster_is_reproducible():
+    """Same rows, same fit, twice. A model that cannot be rebuilt from a dataset
+    version is a model whose past results cannot be checked."""
+    from libs.ms_models.trees import GradientBoostedTrees
+
+    rows, labels = noisy(400, 9, p=6)
+    a = GradientBoostedTrees(subsample=0.7).fit(rows, labels)
+    b = GradientBoostedTrees(subsample=0.7).fit(rows, labels)
+    assert len(a.trees) == len(b.trees)
+    assert [n.value for n in a.trees[0].nodes] == [n.value for n in b.trees[0].nodes]
+
+
+def test_bins_come_from_the_training_rows_only():
+    """The binner is fitted state. Letting it see the rows it will later score
+    is the same leak as fitting a scaler on the test set."""
+    from libs.ms_models.trees import Binner
+
+    rng = random.Random(2)
+    train = [[rng.gauss(0, 1)] for _ in range(200)]
+    binner = Binner().fit(train)
+    edges = [list(e) for e in binner.edges]
+
+    binner.apply_all([[99.0], [-99.0]])
+    assert [list(e) for e in binner.edges] == edges, "scoring changed the bin edges"
+
+
+def test_extreme_values_fall_in_the_end_bins_instead_of_erroring():
+    from libs.ms_models.trees import Binner
+
+    rng = random.Random(4)
+    binner = Binner().fit([[rng.gauss(0, 1)] for _ in range(200)])
+    assert binner.apply([1e9]) == [binner.n_bins(0) - 1]
+    assert binner.apply([-1e9]) == [0]
