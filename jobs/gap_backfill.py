@@ -18,7 +18,9 @@ anything is built on top of it.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -33,6 +35,7 @@ from libs.ms_data.daily import (
     coverage_report,
     session_span,
 )
+from libs.ms_models.cv import Experiment, ExperimentLog
 from libs.ms_models.gap import (
     MIN_SESSIONS_TO_FIT,
     GapForecaster,
@@ -44,6 +47,39 @@ from libs.ms_models.gap import (
 from libs.ms_models.quantile import score_forecasts
 
 INDEX = "NIFTY"
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def lean_features(registry, coverage: dict[str, float], *, min_coverage: float = 0.9) -> list[str]:
+    """One column per series that is actually present, plus the window shape.
+
+    The full set gives every configured series three columns - return, range and
+    a seen flag - which is 27 features against roughly a hundred training rows in
+    the first fold. The seen flags are near-constant once a series is in the
+    cache, the ranges are collinear with the returns, and a series at 0% coverage
+    contributes three columns of zeros that the model can still fit noise to.
+
+    Chosen from measured coverage rather than from trying several sets and
+    keeping the best, which would make the comparison meaningless.
+    """
+    names = [
+        f"{s.symbol}_ret" for s in registry.all() if coverage.get(s.symbol, 0.0) >= min_coverage
+    ]
+    return [*names, "window_hours", "spans_weekend", "prior_session_return"]
+
+
+def dataset_version(series) -> str:
+    """Identifies the exact data an attempt was scored on.
+
+    Two runs reporting different numbers are only comparable if this string
+    matches; if it does not, the model may not have changed at all - the cache
+    just grew by a week.
+    """
+    span = session_span(series)
+    return f"{len(series)}@{span[0]}..{span[1]}" if span else "empty"
 
 
 def load_series(store: DailyStore, symbols: list[str], *, years: int, refresh: bool):
@@ -96,6 +132,21 @@ def main() -> int:
     p.add_argument("--years", type=int, default=2)
     p.add_argument("--folds", type=int, default=4)
     p.add_argument("--forecast", action="store_true", help="predict the next session")
+    p.add_argument(
+        "--name",
+        default="gap_forecaster",
+        help="what to call this attempt in the trial log",
+    )
+    p.add_argument(
+        "--note",
+        default="",
+        help="why this attempt differs from the last one",
+    )
+    p.add_argument(
+        "--lean",
+        action="store_true",
+        help="one column per covered series instead of three per configured series",
+    )
     args = p.parse_args()
 
     cfg = cfgmod.load(warn=False)
@@ -139,11 +190,44 @@ def main() -> int:
         return 1
 
     print()
-    result = walk_forward_evaluate(samples, registry, n_folds=args.folds)
+    features = lean_features(registry, coverage) if args.lean else feature_names(registry)
+    if args.lean:
+        print(
+            f"  lean feature set: {len(features)} columns instead of "
+            f"{len(feature_names(registry))}"
+        )
+    result = walk_forward_evaluate(samples, registry, n_folds=args.folds, features=features)
     if result is None:
         print("  not enough sessions for a walk-forward evaluation")
         return 1
     print(result.render())
+
+    # Record the attempt before reading the result, not after. An evaluation
+    # that is only logged when the author likes the number is not a trial count,
+    # it is a highlight reel - and the deflated Sharpe computed from it would
+    # overstate every subsequent claim.
+    log = ExperimentLog()
+    entry = log.record(
+        Experiment(
+            name=args.name,
+            ts=datetime.now(UTC).isoformat(),
+            config_hash=cfg.config_hash,
+            dataset_version=dataset_version(series),
+            feature_hash=_hash(",".join(feature_names(registry))),
+            metrics={
+                "crps": result.comparison.challenger.crps,
+                "crps_naive": result.comparison.baseline.crps,
+                "improvement": result.comparison.crps_improvement,
+                "cov90": result.comparison.challenger.coverage_90,
+                "passes_g4": float(result.passes_g4),
+                "sessions": float(len(samples)),
+                "features": float(len(features)),
+            },
+            notes=args.note,
+        )
+    )
+    print()
+    print(f"  logged as trial {log.trial_count()} ({entry.name})")
 
     # Climatology floor: what a forecaster that ignores every feature achieves.
     split = int(len(samples) * 0.75)

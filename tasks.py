@@ -163,6 +163,16 @@ def research() -> None:
     run(_py(), "jobs/research_smoke.py", *sys.argv[2:], check=False)
 
 
+def gap() -> None:
+    """Fit and score the overnight gap forecaster on cached daily bars."""
+    run(_py(), "jobs/gap_backfill.py", *sys.argv[2:], check=False)
+
+
+def trials() -> None:
+    """Every attempt ever scored. The count is what makes a result a result."""
+    run(_py(), "jobs/experiment_log.py", *sys.argv[2:], check=False)
+
+
 def qc() -> None:
     """Data quality gates. A FAIL blocks research on that day, by design."""
     run(_py(), "jobs/qc.py", *(sys.argv[2:] or ["--all"]), check=False)
@@ -303,6 +313,8 @@ COMMANDS = {
     "archive": archive,
     "qc": qc,
     "research": research,
+    "gap": gap,
+    "trials": trials,
     "replay": replay,
     "migrate": migrate,
     "record": record,

@@ -222,9 +222,14 @@ class GapForecaster:
         quantiles: Sequence[float] = DEFAULT_QUANTILES,
         epochs: int = 400,
         calibration_share: float = 0.25,
+        features: Sequence[str] | None = None,
     ) -> None:
         self.registry = registry
-        self.names = feature_names(registry)
+        # An explicit feature list overrides the one derived from the registry.
+        # The derived list gives every series three columns whether or not the
+        # series is present in the data, which is the right default for a live
+        # feed and the wrong one for a two-year sample of daily bars.
+        self.names = list(features) if features is not None else feature_names(registry)
         self.model = QuantileRegressor(quantiles=quantiles, epochs=epochs)
         self.climatology = ClimatologyForecaster(quantiles=quantiles)
         self.calibration_share = calibration_share
@@ -356,6 +361,7 @@ def walk_forward_evaluate(
     *,
     n_folds: int = 4,
     min_train: int = MIN_SESSIONS_TO_FIT,
+    features: Sequence[str] | None = None,
 ) -> GapEvaluation | None:
     """Train on the past, test on the future, repeatedly.
 
@@ -384,7 +390,7 @@ def walk_forward_evaluate(
         if len(train) < min_train or not test:
             continue
 
-        model = GapForecaster(registry).fit(train)
+        model = GapForecaster(registry, features=features).fit(train)
         naive = NaiveGapBaseline().fit(train)
         for sample in test:
             out = model.predict(sample)

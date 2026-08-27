@@ -923,13 +923,14 @@ python jobs/label_report.py    # class balance per horizon; sanity-check against
 - [ ] Walk-forward: anchored and rolling
 - [ ] Combinatorial purged CV → a **distribution** of Sharpe, not one number
 - [ ] Deflated Sharpe ratio with a trial counter
-- [ ] **Experiment log**: every run appends config hash, dataset version, metrics
+- [x] **Experiment log**: every run appends config hash, dataset version, metrics — hash-chained and versioned in `research/`, not `build/`
 - [ ] **Locked holdout** guard: last 3 months, refuses to load without an explicit unlock flag; logs every access
 
 **Verify**
 ```bash
 pytest tests/ml/test_cv.py -k "purging_removes_overlap or embargo_applied or holdout_locked"
-python jobs/experiment_log.py --count    # must be non-zero and growing; feeds deflated Sharpe
+python jobs/experiment_log.py --count     # must be non-zero and growing; feeds deflated Sharpe
+python jobs/experiment_log.py --verify    # chain intact = no run was quietly deleted
 ```
 **Traps:** if you evaluate on the locked holdout more than once, delete the project's performance claims. The guard exists to protect you from yourself.
 

@@ -247,6 +247,81 @@ def test_experiment_log_is_append_only(tmp_path):
     assert len(log.all()) == 2
 
 
+def test_chain_is_intact_for_an_untouched_log(tmp_path):
+    log = ExperimentLog(tmp_path / "experiments.jsonl")
+    for i in range(5):
+        log.record(
+            Experiment(
+                name=f"gap_v{i}",
+                ts="t",
+                config_hash="c",
+                dataset_version="d",
+                feature_hash="f",
+                metrics={"crps": 0.003 - i * 0.0001},
+            )
+        )
+    assert log.verify() == []
+
+
+def test_deleting_a_disappointing_run_is_detectable(tmp_path):
+    """The temptation is never to forge a history, it is to quietly drop the one
+    run that did not work. That is the thing this has to catch."""
+    path = tmp_path / "experiments.jsonl"
+    log = ExperimentLog(path)
+    for i in range(4):
+        log.record(
+            Experiment(name=f"v{i}", ts="t", config_hash="c", dataset_version="d", feature_hash="f")
+        )
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = lines[:2] + lines[3:]  # the third attempt never happened
+    path.write_text(chr(10).join(kept) + chr(10), encoding="utf-8")
+
+    broken = ExperimentLog(path).verify()
+    assert broken == [2], "a removed entry left the chain looking intact"
+
+
+def test_editing_a_metric_in_place_is_detectable(tmp_path):
+    path = tmp_path / "experiments.jsonl"
+    log = ExperimentLog(path)
+    for i in range(3):
+        log.record(
+            Experiment(
+                name=f"v{i}",
+                ts="t",
+                config_hash="c",
+                dataset_version="d",
+                feature_hash="f",
+                metrics={"crps": 0.005},
+            )
+        )
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines[0] = lines[0].replace('"crps": 0.005', '"crps": 0.001')
+    path.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+
+    # The edited line still hashes differently, so everything after it detaches.
+    assert ExperimentLog(path).verify() == [1]
+
+
+def test_first_entry_has_no_predecessor(tmp_path):
+    log = ExperimentLog(tmp_path / "experiments.jsonl")
+    entry = log.record(
+        Experiment(name="a", ts="t", config_hash="c", dataset_version="d", feature_hash="f")
+    )
+    assert entry.prev == ""
+    assert log.verify() == []
+
+
+def test_the_log_is_not_under_build_scratch():
+    """build/ is wiped by a clean and absent from a fresh clone. A trial count
+    that resets to zero when someone tidies up would make every deflated number
+    computed from it silently overstated."""
+    from libs.ms_models.cv import EXPERIMENT_LOG, HOLDOUT_ACCESS_LOG
+
+    for path in (EXPERIMENT_LOG, HOLDOUT_ACCESS_LOG):
+        assert "build" not in path.parts, f"{path} lives in scratch and will be lost"
+
+
 # ------------------------------------------------------------ locked holdout
 def test_holdout_is_excluded_from_training_data():
     rows = samples(200, step_minutes=60)

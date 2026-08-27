@@ -25,10 +25,11 @@ looking difficult and always leaves a trace.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta
 from itertools import combinations
 from pathlib import Path
@@ -39,8 +40,14 @@ from libs.ms_core.obs import get_logger
 log = get_logger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-EXPERIMENT_LOG = REPO_ROOT / "build" / "experiments.jsonl"
-HOLDOUT_ACCESS_LOG = REPO_ROOT / "build" / "holdout_access.jsonl"
+# Deliberately NOT under build/. These two files are the only evidence that a
+# reported number was the first attempt rather than the fortieth, and build/ is
+# scratch: gitignored, wiped by a clean, absent from a fresh clone. A trial
+# count that resets to zero whenever someone tidies up is worse than no trial
+# count, because a deflated Sharpe computed against it looks corrected.
+# They live in the repository and are committed like source.
+EXPERIMENT_LOG = REPO_ROOT / "research" / "experiments.jsonl"
+HOLDOUT_ACCESS_LOG = REPO_ROOT / "research" / "holdout_access.jsonl"
 
 
 @dataclass(frozen=True)
@@ -296,6 +303,11 @@ class Experiment:
     feature_hash: str
     metrics: dict[str, float] = field(default_factory=dict)
     notes: str = ""
+    prev: str = ""  # hash of the preceding entry; see ExperimentLog.verify
+
+
+def _line_hash(line: str) -> str:
+    return hashlib.sha256(line.encode("utf-8")).hexdigest()[:16]
 
 
 class ExperimentLog:
@@ -310,19 +322,43 @@ class ExperimentLog:
     def __init__(self, path: Path = EXPERIMENT_LOG) -> None:
         self.path = path
 
-    def record(self, experiment: Experiment) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(asdict(experiment), sort_keys=True) + "\n")
-
-    def all(self) -> list[Experiment]:
+    def _lines(self) -> list[str]:
         if not self.path.exists():
             return []
-        out = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                out.append(Experiment(**json.loads(line)))
-        return out
+        return [ln for ln in self.path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    def record(self, experiment: Experiment) -> Experiment:
+        """Append one entry, chained to the one before it.
+
+        Append-only is a description of intent, not a property of a file - any
+        editor can delete the runs that did not work. Each entry therefore
+        carries the hash of the previous line, so removing or altering an entry
+        breaks the chain at that point and :meth:`verify` says where.
+
+        This does not make tampering impossible; a determined author can rewrite
+        the whole file. It makes it deliberate rather than casual, which is the
+        realistic threat - the temptation is to quietly drop one embarrassing
+        run, not to forge a history.
+        """
+        lines = self._lines()
+        chained = replace(experiment, prev=_line_hash(lines[-1]) if lines else "")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(asdict(chained), sort_keys=True) + chr(10))
+        return chained
+
+    def all(self) -> list[Experiment]:
+        return [Experiment(**json.loads(line)) for line in self._lines()]
+
+    def verify(self) -> list[int]:
+        """Return the indices where the chain is broken. Empty means intact."""
+        broken: list[int] = []
+        lines = self._lines()
+        for i, line in enumerate(lines):
+            expected = _line_hash(lines[i - 1]) if i else ""
+            if json.loads(line).get("prev", "") != expected:
+                broken.append(i)
+        return broken
 
     def trial_count(self, name_prefix: str = "") -> int:
         return sum(1 for e in self.all() if e.name.startswith(name_prefix))
