@@ -190,11 +190,11 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M52** | M0 rules baseline | L5 | P5 | M34, M44 | | ☑ |
 | **M53** | Direction model (boosted trees + isotonic) | L5 | P5 | M51 | ⚙ | ☑ |
 | **M54** | Quantile model | L5 | P6 | M51 | ⚙ | ☐ |
-| **M55** | Volatility model | L5 | P5 | M51 | ⚙ | ☐ |
+| **M55** | Volatility model (HAR + boosted residual) | L5 | P5 | M51 | ⚙ | ☑ |
 | **M56** | IV-change model | L5 | P7 | M51, M70 | ⚙ | ☐ |
 | **M57** | Meta-labeller | L5 | P5 | M53 | ⚙ | ☐ |
 | **M58** | Sequence models (TCN / transformer) | L5 | P6 | M51, M13 | ⚙ | ⊘ |
-| **M59** | Ensemble, calibration, conformal | L5 | P5 | M53, M55 | ⚙ | ☐ |
+| **M59** | Ensemble, calibration, conformal | L5 | P5 | M53, M55 | ⚙ | ☑ |
 | **M5A** | Model registry & ONNX serving | L5 | P5 | M59 | | ☐ |
 | **M60** | Path sampler | L6 | P6 | M55, M54 | ⚙ | ☐ |
 | **M61** | Fan-chart producer | L6 | P6 | M60 | | ☐ |
@@ -1647,7 +1647,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **81** | **30** | **4** | **47** |
+| **Total** | **81** | **32** | **4** | **45** |
 
 ### Gate ledger
 | Gate | Blocks | Status |

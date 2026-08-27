@@ -279,3 +279,112 @@ coin flip. Two standard errors is the ordinary 5% bar:
 Everything here runs on synthetic data with a known answer. Real numbers wait on
 a broker feed — and when it arrives, the model class is a swap behind `Model`,
 not a rewrite.
+
+---
+
+# Addendum — M55 volatility and M59 ensemble, 2026-08-27
+
+Two more modules, the same discipline, three more defects found in code written
+the same day.
+
+## M55 · volatility
+
+Range-based estimators (Parkinson, Garman-Klass) rather than close-to-close: a
+bar that opened, swung two percent either way and closed flat reports **zero**
+volatility under squared returns, and the high and low are already in the bar.
+
+HAR augmented, never replaced. The booster fits HAR's log-residual, so the worst
+case degrades to HAR rather than to noise. Scored on **QLIKE**, not MSE — MSE on
+variance is dominated by the largest few observations, so a model can look good
+by getting a handful of crisis days right and being useless the rest of the time.
+
+### The retransformation trap
+
+Volatility is modelled in logs. Exponentiating the fit returns the **median**,
+not the mean, and for a right-skewed target that is a permanent downward bias no
+relative metric can see — the model can rank perfectly and still be wrong by a
+constant factor every single time. Duan's smearing estimator corrects it
+non-parametrically, which matters because log-volatility residuals are visibly
+fat-tailed and the `exp(σ²/2)` correction assumes they are not.
+
+### Two defects the null test caught
+
+*The booster was kept on a win rather than on evidence.* On a series with no
+driver at all, it still beat HAR on the validation slice in one fold out of four
+and cost 1.1% on the test rows. A finite validation slice makes a small win a
+coin toss. The comparison is now **paired per observation** and has to clear two
+standard errors — paired because both models see the same volatile days, and the
+common component of their errors dwarfs the difference between them.
+
+*Discarding the booster left a handicap behind.* HAR stayed fitted on 75% of the
+training rows even after the booster was dropped, because that split existed to
+hold out a validation slice. So the "augmented" model scored **0.8% worse than
+plain HAR** on a series with no signal — purely from the smaller fit. HAR is now
+refitted on every row once the keep-or-drop decision is made. Not leakage: the
+validation rows informed a discrete decision, not the coefficients.
+
+| driver strength | QLIKE change vs HAR | booster kept |
+|---|---|---|
+| none | **+0.0%** | 0/4 folds |
+| 0.3 | +22.0% | 3/4 |
+| 0.8 | +36.1% | 3/4 |
+| 1.5 | +26.1% | 3/4 |
+
+Exactly what the residual formulation is supposed to buy: it cannot be worse
+than its own baseline, and it earns its place when there is something to earn.
+
+## M59 · ensemble, calibration, conformal
+
+The design rule is the opposite of the usual instinct: **keep the combiner
+smaller than the things it combines.** A stacker sees a few hundred out-of-fold
+rows whose every column is already a fitted model's output. It is the easiest
+place in the system to overfit and the damage is invisible, because the stack is
+validated on the same folds that produced its inputs.
+
+So: one weight per model plus an intercept, an L2 prior centred on **equal
+weighting** rather than zero, and it must beat the best single member by a
+margin or it does not ship at all.
+
+### The defect
+
+*The meta-learner diverged.* Base probabilities clamped at [0.01, 0.99] give
+log-odds reaching ±4.6, and a fixed-step gradient descent on those blew up:
+stacked log loss **14.9** against 0.72 for its best single member. With a strong
+penalty it oscillated instead of shrinking, because `lr * l2` exceeded one.
+
+Replaced with IRLS — Newton's method — which has no step size to get wrong and
+converges in a handful of iterations on a problem this small. A second, quieter
+bug surfaced underneath: the ridge was scaled by `len(rows)`, making `l2=1` worth
+five hundred pseudo-observations on a five-hundred-row fit. That pinned every
+weight to the prior and produced a stack measurably worse than its own best
+member.
+
+### And one piece of arithmetic that was simply incomplete
+
+Murphy's Brier decomposition — `reliability − resolution + uncertainty` — is
+exact only when the forecast is **constant within each bin**. On continuous
+probabilities there is a within-bin variance term that does not vanish, and the
+identity missed by a few thousandths. Small enough to dismiss as rounding, which
+is exactly how a real arithmetic error would hide.
+
+The decomposition now reconciles the *binned* Brier score exactly and reports
+the discretisation cost as its own named quantity, so the residual means
+something: if it is not zero, something is wrong.
+
+### Also enforced
+
+- **Out-of-fold means out-of-fold.** `OutOfFoldMatrix` refuses a row whose fold
+  is not recorded. An in-sample base prediction turns the stack into a machine
+  for amplifying whichever member memorised hardest — and that failure produces
+  excellent backtests.
+- **Walk-forward, not K-fold.** A K-fold prediction for an early row comes from a
+  model fitted partly on later rows, which cannot happen in production.
+- **Rows a model never saw are dropped, not filled with 0.5.** Filling says the
+  model was undecided when it was never asked, and the weight learned is a
+  weight on an absence.
+- **The conformal `n+1`.** `ceil((n+1)(1−α))`, not `ceil(n(1−α))`. That term is
+  the entire finite-sample guarantee; without it intervals are quietly a few
+  percent narrow and the shortfall looks like bad luck.
+- **Coverage is marginal, not conditional.** 90% overall can be 98% on quiet days
+  and 60% on volatile ones — and volatile days are when the interval was
+  supposed to help. `coverage_by_group` exists to show it.
