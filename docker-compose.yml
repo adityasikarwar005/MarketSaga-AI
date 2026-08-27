@@ -15,7 +15,13 @@ services:
       POSTGRES_PASSWORD: marketsage_dev   # dev only; live uses a secrets manager
       POSTGRES_DB: marketsage
     ports:
-      - "5432:5432"
+      # 5433 on the host, 5432 inside. A Windows PostgreSQL service installs
+      # itself on 5432 and starts at boot, so "localhost:5432" on a developer
+      # machine is whichever Postgres won the race - and the failure is an auth
+      # error against a database that exists, which reads like a wrong password
+      # rather than a wrong server. Publishing somewhere uncontested makes the
+      # question unaskable.
+      - "5433:5432"
     volumes:
       - timescale_data:/var/lib/postgresql/data
     healthcheck:

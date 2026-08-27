@@ -23,12 +23,15 @@ from tests.conftest import TEST_DAY, ist
 
 pytestmark = pytest.mark.infra
 
-# A socket probe cannot tell OUR database from someone else's Postgres on 5432,
+# A socket probe cannot tell OUR database from someone else's Postgres on the
+# port, and this is not hypothetical - a stock Windows PostgreSQL 18 service was
+# holding 5432 on the machine this was first brought up on. The container now
+# publishes 5433, and the fixture still decides by actually connecting:
 # so the fixture decides by actually connecting. The probe stays as a fast path
 # for the common "nothing is running" case.
 DB_LISTENING = is_reachable(DEFAULT_DSN)
 requires_db = pytest.mark.skipif(
-    not DB_LISTENING, reason="nothing listening on 5432 - run: python tasks.py up"
+    not DB_LISTENING, reason="nothing listening on 5433 - run: python tasks.py up"
 )
 
 

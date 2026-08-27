@@ -114,3 +114,62 @@ npx pyright                      # what the editor sees
 
 If mypy is clean and pyright is not, the disagreement is a config problem and
 belongs in this file. If mypy is unhappy, the code is.
+
+---
+
+# Local infrastructure
+
+`docker compose up -d` brings up two containers: TimescaleDB and Redis. Nothing
+else — Kubernetes before Tier T5 is overhead, and one machine with a fast disk
+beats a cluster at this size.
+
+## Why Postgres is published on 5433, not 5432
+
+A stock Windows **PostgreSQL service installs on 5432 and starts at boot**. On
+the machine this project was first brought up on, `postgresql-x64-18` was already
+holding the port, so `localhost:5432` reached *that* server rather than the
+container.
+
+The failure it produces is the misleading part:
+
+```
+psycopg.OperationalError: password authentication failed for user "marketsage"
+```
+
+That reads as a wrong password against the right database. It is a **right
+password against the wrong database** — and chasing the credentials is the
+natural response and the wrong one.
+
+The container now publishes `5433:5432`. The existing system Postgres is left
+alone; the project's port is simply somewhere uncontested, which makes the
+question unaskable rather than merely answerable.
+
+`tests/integration/test_store.py` already carried the right guard for this — it
+decides by *actually connecting* rather than probing the socket, with a comment
+saying a probe cannot tell our database from someone else's. That comment was
+written before this happened and it is exactly what happened.
+
+## Getting the CLI on PATH
+
+Docker Desktop puts `docker.exe` in
+
+```
+C:\Users\<you>\AppData\Local\Programs\DockerDesktop\resources\bin
+```
+
+and adds it to the **user** PATH. A shell that was already open before the
+install will not see it. Either restart the shell, or in the current one:
+
+```powershell
+$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+            [Environment]::GetEnvironmentVariable("Path","User")
+```
+
+## First-run sequence
+
+```bash
+docker compose up -d              # containers
+pip install -e ".[infra]"         # redis, psycopg, pyarrow, duckdb, pandas
+python tasks.py migrate           # hypertables and indexes
+python -m pytest -m infra -q      # the tests that were skipping until now
+```

@@ -21,7 +21,7 @@ def _reachable(host: str, port: int, timeout: float = 0.4) -> bool:
         return False
 
 
-POSTGRES_UP = _reachable("127.0.0.1", 5432)
+POSTGRES_UP = _reachable("127.0.0.1", 5433)
 REDIS_UP = _reachable("127.0.0.1", 6379)
 
 

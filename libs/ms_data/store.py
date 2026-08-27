@@ -36,7 +36,10 @@ from libs.ms_core.schemas import Candle, ChainSnapshot, Tick
 
 log = get_logger(__name__)
 
-DEFAULT_DSN = "postgresql://marketsage:marketsage_dev@127.0.0.1:5432/marketsage"
+# Port 5433, matching docker-compose.yml. A stock Windows PostgreSQL service
+# owns 5432 and starts at boot; connecting there reaches whichever server won,
+# and reports a password failure rather than a wrong-server one.
+DEFAULT_DSN = "postgresql://marketsage:marketsage_dev@127.0.0.1:5433/marketsage"
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
