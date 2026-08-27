@@ -1263,3 +1263,78 @@ the market shut, into a book that had been open the whole evening.
 `scheduled_for` is now timezone-aware in `Asia/Kolkata`, and three tests pin it:
 that the offset is +05:30, that 15:20 IST is 09:50 UTC, and that every job in the
 table schedules to an aware instant.
+
+---
+
+# M94 — attribution and the class-level kill policy, 2026-08-28
+
+The plan's note says this policy does more for long-run profitability than any
+model improvement, and it is worth taking literally.
+
+**A model that is right on eight event classes and quietly bleeds on the ninth
+does not look broken.** It looks like a model with a mediocre average, and the
+instinct is to improve the model. The cheaper and larger win is to stop trading
+the ninth.
+
+## Two conditions, both necessary
+
+A class is disabled at **≥25 trades AND negative expectancy** over a rolling
+quarter.
+
+The trade count is not a formality. With five trades a losing streak is the
+overwhelmingly likely outcome of a coin flip *with* an edge, and a policy that
+disables on it will disable half the working classes — then look effective,
+because the survivors are the ones that got lucky. The threshold separates
+*"this does not work"* from *"this has not had a chance"*.
+
+The window is rolling rather than since-inception: a class that lost for six
+months and has worked for three is a class that **changed**, and an all-time
+average hides exactly that.
+
+## Re-enabling requires a change, not patience
+
+This is the part that makes the policy real.
+
+A disabled class that comes back after a cooling-off period comes back to the
+same model, the same features and the same market, and loses money again. **The
+only thing that elapsed was the operator's memory.**
+
+`reenable` demands a changed model version *or* a written justification of at
+least 30 characters. Time alone does nothing, and there is no parameter that
+makes it do something. A test asserts that 180 days of waiting leaves the class
+disabled.
+
+The register is **state**, not a derived value. Recomputing it each week would
+re-enable a class the moment a quiet quarter pushed its rolling expectancy back
+above zero — the same class, the same model, the same reason it lost money. A
+test pins that too.
+
+## Metrics that say different things
+
+- **avg R** rather than only rupee expectancy. Expectancy says a class that
+  trades big is important; avg R says whether it is any *good*. Reporting only
+  the first is how a large, mediocre class hides behind a small, excellent one —
+  and a test constructs exactly that pair.
+- **Edge realisation slope**: how much of the claimed move actually arrived. A
+  slope near zero means confidence carries no information about magnitude, which
+  is perfectly compatible with a good hit rate. A slope well below one means the
+  edge is real but consistently smaller than claimed — a *sizing* problem, not a
+  model problem.
+- **Brier decomposition**, reused from the ensemble rather than reimplemented.
+  High reliability error means the probabilities are mislabelled and calibration
+  fixes it; low resolution means the model is not separating outcomes at all and
+  no calibration will help.
+
+## Two refusals in the reporting
+
+A week with fewer than 20 resolved predictions reports **n/a** for the
+reliability slope rather than a number. Twelve trades cannot support one, and
+printing it invites acting on it.
+
+And `--apply` is required to disable anything. Without it the run is a dry read:
+a policy that silently changes what trades on every scheduled run is one nobody
+remembers agreeing to.
+
+Only **resolved** entries are attributed. Counting unresolvable ones as zeros
+would dilute every average toward nothing and make a class with missing outcomes
+look *safer* than one that was actually measured.
