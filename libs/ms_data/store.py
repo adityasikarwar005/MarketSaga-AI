@@ -388,10 +388,10 @@ def load_day_from_archive(
         total = 0
         for src in sorted(partition.glob("*.ndjson")):
             if stream == "ticks":
-                total += store.insert_ticks(read_stream(src, Tick))  # type: ignore[arg-type]
+                total += store.insert_ticks(read_stream(src, Tick))
             elif stream == "candles":
-                total += store.insert_candles(read_stream(src, Candle))  # type: ignore[arg-type]
+                total += store.insert_candles(read_stream(src, Candle))
             elif stream == "chain":
-                total += store.insert_chain(read_stream(src, ChainSnapshot))  # type: ignore[arg-type]
+                total += store.insert_chain(read_stream(src, ChainSnapshot))
         out[stream] = total
     return out

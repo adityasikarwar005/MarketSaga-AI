@@ -1,0 +1,27 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "All",
+  "include": [
+    "libs",
+    "jobs",
+    "services",
+    "tests",
+    "tasks.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    "build",
+    "data",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache"
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportMissingTypeStubs": "none",
+  "ignore": []
+}

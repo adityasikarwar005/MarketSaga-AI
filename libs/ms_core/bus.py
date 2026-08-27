@@ -28,7 +28,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from pydantic import ValidationError
 
@@ -232,7 +232,12 @@ class RedisStreamsBus(Bus):
                 raise ImportError(
                     "RedisStreamsBus needs the infra extra: pip install -e '.[infra]'"
                 ) from exc
-            self._r = redis.Redis.from_url(url, decode_responses=True)
+            # decode_responses=True makes every reply str rather than bytes,
+            # which is the contract the rest of this class is written against.
+            # The annotation says so out loud: without it a checker widens every
+            # read back to `bytes | str | Any` and the code below looks wrong
+            # while being right.
+            self._r = cast("Any", redis.Redis.from_url(url, decode_responses=True))
         self._maxlen = maxlen
 
     @staticmethod

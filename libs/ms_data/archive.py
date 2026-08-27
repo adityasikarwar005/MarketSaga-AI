@@ -228,17 +228,17 @@ def archive_day(
     columns: Sequence[str]
     for src in sources:
         if stream == "ticks":
-            rows = tick_rows(read_stream(src, Tick))  # type: ignore[arg-type]
+            rows = tick_rows(read_stream(src, Tick))
             columns = TICK_COLUMNS
             key = src.stem.split("-", 1)[-1]
             out = parquet_root / stream / f"date={day.isoformat()}" / f"instrument={key}.parquet"
         elif stream == "candles":
-            rows = candle_rows(read_stream(src, Candle))  # type: ignore[arg-type]
+            rows = candle_rows(read_stream(src, Candle))
             columns = CANDLE_COLUMNS
             key = src.stem.split("-", 1)[-1]
             out = parquet_root / stream / f"date={day.isoformat()}" / f"instrument={key}.parquet"
         else:  # chain
-            rows = chain_rows(read_stream(src, ChainSnapshot))  # type: ignore[arg-type]
+            rows = chain_rows(read_stream(src, ChainSnapshot))
             columns = CHAIN_COLUMNS
             key = src.stem.split("-", 1)[-1]
             out = parquet_root / stream / f"date={day.isoformat()}" / f"underlying={key}.parquet"

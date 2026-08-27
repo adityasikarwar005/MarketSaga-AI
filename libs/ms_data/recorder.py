@@ -255,8 +255,15 @@ def _first_last_ts(path: Path) -> tuple[str | None, str | None]:
     return first, last
 
 
-def read_stream(path: Path, cls: type[Msg]) -> Iterator[Msg]:
-    """Re-read a recorded file. Malformed lines are reported, never skipped silently."""
+def read_stream[T: Msg](path: Path, cls: type[T]) -> Iterator[T]:
+    """Re-read a recorded file. Malformed lines are reported, never skipped silently.
+
+    Generic in the message type: this yields exactly what ``cls`` validates, and
+    the previous signature widened that to ``Msg`` on the way out. Every caller
+    then knew less than it had a right to - reading a Candle stream produced an
+    iterator of Msg, and the checker could no longer tell a candle field from a
+    typo.
+    """
     with path.open(encoding="utf-8") as fh:
         for lineno, line in enumerate(fh, 1):
             if not line.strip():

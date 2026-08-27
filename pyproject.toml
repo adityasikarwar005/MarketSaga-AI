@@ -60,10 +60,21 @@ target-version = ["py312"]
 
 [tool.mypy]
 python_version = "3.12"
-files = ["libs"]
+# jobs/ and tasks.py were outside this for a long time, and a real bug lived
+# there the whole time: research_smoke.py passed `regimes.get(day)` - a
+# `Regime | None` - into a parameter typed `Regime`, silently overriding its
+# default and picking a baseline keyed on nothing. Nothing was checking.
+files = ["libs", "jobs", "tasks.py"]
 strict_optional = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
+
+# Scripts, not library code. Type errors still matter there - that is the whole
+# reason for widening the scope above - but demanding a full annotation on every
+# throwaway helper in a job script buys noise rather than safety.
+[[tool.mypy.overrides]]
+module = ["jobs.*", "tasks"]
+disallow_untyped_defs = false
 
 # Optional dependencies with no stubs. They are imported lazily and only used
 # when the corresponding extra is installed, so a missing stub is expected.

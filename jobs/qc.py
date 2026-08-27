@@ -20,18 +20,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from libs.ms_core import config as cfgmod
 from libs.ms_core.clock import SessionCalendar
 from libs.ms_core.obs import configure
-from libs.ms_core.schemas import Candle, ChainSnapshot, RawNewsItem, Tick
+from libs.ms_core.schemas import Candle, ChainSnapshot, Msg, RawNewsItem, Tick
 from libs.ms_data.holidays import HolidayStore
 from libs.ms_data.quality import run_market_checks
 from libs.ms_data.recorder import DATA_ROOT, read_stream
 from libs.ms_data.replay import recorded_days
 
 
-def _load(stream: str, day: date, cls: type):
+def _load[T: Msg](stream: str, day: date, cls: type[T]) -> list[T]:
     partition = DATA_ROOT / stream / f"date={day.isoformat()}"
     if not partition.exists():
         return []
-    out = []
+    out: list[T] = []
     for path in sorted(partition.glob("*.ndjson")):
         out.extend(read_stream(path, cls))
     return out

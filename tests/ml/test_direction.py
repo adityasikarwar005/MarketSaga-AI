@@ -27,8 +27,16 @@ def sample(n: int, seed: int, *, signal: bool = True, missing: float = 0.0):
     rng = random.Random(seed)
     rows, labels = [], []
     for _ in range(n):
-        raw: dict[str, float | None] = {k: rng.gauss(0, 1) for k in NAMES}
-        z = 1.1 * raw["f0"] - 0.8 * raw["f1"] + 0.6 * raw["f0"] * raw["f2"] if signal else 0.0
+        # Built numeric first, then widened. Declaring the dict as
+        # `float | None` up front and doing arithmetic on it is what the model
+        # under test is not allowed to do either.
+        values = {k: rng.gauss(0, 1) for k in NAMES}
+        z = (
+            1.1 * values["f0"] - 0.8 * values["f1"] + 0.6 * values["f0"] * values["f2"]
+            if signal
+            else 0.0
+        )
+        raw: dict[str, float | None] = dict(values)
         y = 1 if rng.random() < 1 / (1 + math.exp(-z)) else -1
         if rng.random() < 0.08:
             y = 0  # timeout, as the triple-barrier labeller emits

@@ -31,7 +31,12 @@ from libs.ms_features import catalogue  # noqa: F401  (registers the catalogue)
 from libs.ms_features.leakage import detect_leakage, lint_all
 from libs.ms_features.registry import REGISTRY
 from libs.ms_features.sources import load_day
-from libs.ms_impact.baseline import build_profile, classify_regimes, group_by_session
+from libs.ms_impact.baseline import (
+    Regime,
+    build_profile,
+    classify_regimes,
+    group_by_session,
+)
 from libs.ms_impact.study import build_library, observe_event, synthetic_events
 from libs.ms_models.baseline import RulesBaseline, climatology, compare, score
 from libs.ms_models.cv import audit_all, purged_kfold, samples_from_labels, walk_forward
@@ -92,8 +97,11 @@ def run(day: date, instrument_id: int, horizon: int) -> int:
     )
     print(f"  audit     : {'clean' if clean else 'LEAKS FOUND'}")
     for audit in audits:
-        for leak in audit.leaks[:2]:
-            print(f"    {audit.split}: {leak}")
+        # Not `leak`: that name already holds a LeakReport from the feature
+        # check above, and these are split-audit strings. Two different concepts
+        # under one name is not a bug today and is one after the next edit.
+        for overlap in audit.leaks[:2]:
+            print(f"    {audit.split}: {overlap}")
 
     wf = walk_forward(samples, n_splits=4, anchored=True)
     print(f"  walkfwd   : {len(wf)} folds, " + ", ".join(s.sizes for s in wf[:2]) + " ...")
@@ -116,7 +124,13 @@ def run(day: date, instrument_id: int, horizon: int) -> int:
             severity,
             profile,
             calendar,
-            regime=regimes.get(event_day),
+            # .get() with an explicit default, not a bare .get(). A day that
+            # classify_regimes could not label returns None, and passing that
+            # through overrides observe_event's Regime.NORMAL default with None
+            # - which then flows into abnormal_return and picks a baseline
+            # keyed on nothing. Found by pyright; mypy never looked, because its
+            # scope was libs/ only.
+            regime=regimes.get(event_day, Regime.NORMAL),
         )
         if obs:
             observations.append(obs)
