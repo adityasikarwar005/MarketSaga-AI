@@ -171,9 +171,9 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M27** | Event classifier (tier 2) | L2 | P3 | M26 | ⚙ | ☐ |
 | **M28** | Entity/geo extraction & KG routing | L2 | P3 | M27 | ⚙ | ☐ |
 | **M29** | Novelty, confirmation, credibility fusion | L2 | P3 | M27, M13 | ⚙ | ☐ |
-| **M30** | Abnormal-return engine | L3 | P4 | M13, M17 | | ☐ |
-| **M31** | Event-study runner | L3 | P4 | M30, M25 | | ☐ |
-| **M32** | Hierarchical Bayesian impact priors | L3 | P4 | M31 | ⚙ | ☐ |
+| **M30** | Abnormal-return engine | L3 | P4 | M13, M17 | | ☑ |
+| **M31** | Event-study runner | L3 | P4 | M30, M25 | | ☑ |
+| **M32** | Hierarchical Bayesian impact priors | L3 | P4 | M31 | ⚙ |☑ |
 | **M33** | Cross-asset transfer estimator | L3 | P4 | M15, M30 | ⚙ | ☐ |
 | **M34** | Live impact scorer | L3 | P4 | M32, M29 | | ☐ |
 | **M35** | Overnight gap forecaster | L3 | P4 | M33, M31 | ⚙ | ☐ |
@@ -1600,7 +1600,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L0 Foundation | 7 | 6 | 1 | 0 |
 | L1 Market Data | 10 | 9 | 1 | 0 |
 | L2 News & Events | 10 | 0 | 0 | 10 |
-| L3 Impact | 6 | 0 | 0 | 6 |
+| L3 Impact | 6 | 3 | 0 | 3 |
 | L4 Features | 6 | 4 | 1 | 1 |
 | L5 Models | 11 | 3 | 0 | 8 |
 | L6 Projection | 3 | 0 | 0 | 3 |
@@ -1608,7 +1608,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **79** | **22** | **4** | **53** |
+| **Total** | **79** | **25** | **4** | **50** |
 
 ### Gate ledger
 | Gate | Blocks | Status |

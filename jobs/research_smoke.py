@@ -3,9 +3,9 @@
     python jobs/research_smoke.py --date 2026-08-26
 
 Runs the whole research stack against a recorded session: features, labels,
-purged splits, split audit, and the M0 baseline scored against realised
-outcomes. It proves the pieces compose, and it is the shape every future
-training script will take.
+purged splits, split audit, the time-of-day baseline, the impact library, and
+the M0 baseline scored against realised outcomes. It proves the pieces compose,
+and it is the shape every future training script will take.
 
 The numbers it prints are not a result. One synthetic session is not evidence of
 anything, and the baseline is meant to be beaten rather than to win. What this
@@ -31,6 +31,8 @@ from libs.ms_features import catalogue  # noqa: F401  (registers the catalogue)
 from libs.ms_features.leakage import detect_leakage, lint_all
 from libs.ms_features.registry import REGISTRY
 from libs.ms_features.sources import load_day
+from libs.ms_impact.baseline import build_profile, classify_regimes, group_by_session
+from libs.ms_impact.study import build_library, observe_event, synthetic_events
 from libs.ms_models.baseline import RulesBaseline, climatology, compare, score
 from libs.ms_models.cv import audit_all, purged_kfold, samples_from_labels, walk_forward
 from libs.ms_models.labels import BarrierSpec, build_labels, summarise
@@ -53,7 +55,8 @@ def run(day: date, instrument_id: int, horizon: int) -> int:
     source = loaded.source()
 
     # ---- features -------------------------------------------------------
-    print(f"\n  {lint_all().render().strip()}")
+    print()
+    print("  " + lint_all().render().strip())
     bars = sorted(
         (c for c in loaded.candles if c.instrument_id == instrument_id), key=lambda c: c.ts
     )
@@ -73,16 +76,19 @@ def run(day: date, instrument_id: int, horizon: int) -> int:
     if not labels:
         print("  no labels produced - session too short or volatility too low")
         return 1
-    print("\n" + summarise(labels, calendar).render())
+    print()
+    print(summarise(labels, calendar).render())
 
     # ---- splits ---------------------------------------------------------
     samples = samples_from_labels(labels)
     splits = purged_kfold(samples, n_splits=5, embargo=timedelta(minutes=30))
     audits = audit_all(samples, splits)
     clean = all(a.ok for a in audits)
+    print()
     print(
-        f"\n  splits    : {len(splits)} purged folds, "
-        f"{sum(s.purged for s in splits):,} purged, {sum(s.embargoed for s in splits):,} embargoed"
+        f"  splits    : {len(splits)} purged folds, "
+        f"{sum(s.purged for s in splits):,} purged, "
+        f"{sum(s.embargoed for s in splits):,} embargoed"
     )
     print(f"  audit     : {'clean' if clean else 'LEAKS FOUND'}")
     for audit in audits:
@@ -91,6 +97,41 @@ def run(day: date, instrument_id: int, horizon: int) -> int:
 
     wf = walk_forward(samples, n_splits=4, anchored=True)
     print(f"  walkfwd   : {len(wf)} folds, " + ", ".join(s.sizes for s in wf[:2]) + " ...")
+
+    # ---- impact library -------------------------------------------------
+    per_session = group_by_session(loaded.candles, calendar, instrument_id=instrument_id)
+    profile = build_profile(per_session, calendar, horizon_minutes=15)
+    print()
+    print(profile.render())
+
+    regimes = classify_regimes(per_session)
+    observations = []
+    for event_id, cls, t0, severity in synthetic_events(per_session, calendar):
+        event_day = calendar.local(t0).date()
+        obs = observe_event(
+            per_session[event_day],
+            t0,
+            event_id,
+            cls,
+            severity,
+            profile,
+            calendar,
+            regime=regimes.get(event_day),
+        )
+        if obs:
+            observations.append(obs)
+
+    if observations:
+        library = build_library(observations, profile=profile, calendar=calendar)
+        print()
+        print(library.render(15))
+        print(
+            "\n  Those events are SYNTHETIC - random timestamps on a random walk."
+            "\n  The library finding nothing is the only honest outcome when there"
+            "\n  is nothing to find."
+        )
+    else:
+        print("\n  no event observations - not enough history yet")
 
     # ---- baseline -------------------------------------------------------
     model = RulesBaseline()
@@ -101,9 +142,8 @@ def run(day: date, instrument_id: int, horizon: int) -> int:
         outcomes.append(int(label.outcome))
 
     base_rate = climatology(outcomes)
-    always_flat = [0.5] * len(probs)
     result = compare(
-        always_flat,
+        [0.5] * len(probs),
         probs,
         outcomes,
         baseline_name="coin_flip",
@@ -111,9 +151,11 @@ def run(day: date, instrument_id: int, horizon: int) -> int:
         bootstrap=1000,
     )
 
-    print(f"\n  climatology (base rate of UP among barrier hits): {base_rate:.3f}")
+    print()
+    print(f"  climatology (base rate of UP among barrier hits): {base_rate:.3f}")
     print(result.render())
-    print(f"\n  {score(model.name, probs, outcomes).render().strip()}")
+    print()
+    print(score(model.name, probs, outcomes).render())
 
     print(
         "\n  Note: one session is not evidence. The baseline exists to be beaten,"
