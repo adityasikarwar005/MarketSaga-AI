@@ -192,7 +192,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M54** | Quantile model | L5 | P6 | M51 | ⚙ | ☐ |
 | **M55** | Volatility model (HAR + boosted residual) | L5 | P5 | M51 | ⚙ | ☑ |
 | **M56** | IV-change model | L5 | P7 | M51, M70 | ⚙ | ☐ |
-| **M57** | Meta-labeller | L5 | P5 | M53 | ⚙ | ☐ |
+| **M57** | Meta-labeller (post-cost, threshold from loss ratio) | L5 | P5 | M53, M74 | ⚙ | ☑ |
 | **M58** | Sequence models (TCN / transformer) | L5 | P6 | M51, M13 | ⚙ | ⊘ |
 | **M59** | Ensemble, calibration, conformal | L5 | P5 | M53, M55 | ⚙ | ☑ |
 | **M5A** | Model registry & ONNX serving | L5 | P5 | M59 | | ☐ |
@@ -203,7 +203,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M71** | Greeks engine | L7 | P7 | M70 | | ◐ |
 | **M72** | Structure enumerator & liquidity filter | L7 | P7 | M71 | | ☐ |
 | **M73** | Monte Carlo P&L engine | L7 | P7 | M72, M60, M56 | | ☐ |
-| **M74** | Cost model | L7 | P7 | M01 | | ☐ |
+| **M74** | Cost model (PIT rates, STT bases, slippage) | L7 | P7 | M01 | | ☑ |
 | **M75** | Position sizing | L7 | P7 | M73, M59 | | ☐ |
 | **M76** | Risk gate & kill switches | L7 | P7 | M75 | | ☐ |
 | **M77** | Recommendation assembler | L7 | P7 | M76 | | ☐ |
@@ -1647,7 +1647,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 0 | 0 | 6 |
 | L9 Surface | 6 | 0 | 0 | 6 |
 | LX Ops | 6 | 0 | 0 | 6 |
-| **Total** | **81** | **32** | **4** | **45** |
+| **Total** | **81** | **34** | **4** | **43** |
 
 ### Gate ledger
 | Gate | Blocks | Status |

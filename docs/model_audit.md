@@ -388,3 +388,103 @@ something: if it is not zero, something is wrong.
 - **Coverage is marginal, not conditional.** 90% overall can be 98% on quiet days
   and 60% on volatile ones — and volatile days are when the interval was
   supposed to help. `coverage_by_group` exists to show it.
+
+---
+
+# Addendum — M74 costs and M57 meta-labeller, 2026-08-27
+
+## M74 · the cost model
+
+Where most retail quant projects quietly die. The components are levied on three
+different bases and using the wrong one is a large, silent error:
+
+- **Brokerage** — flat per *order*. A four-order spread pays it four times
+  regardless of size.
+- **Exchange fee** — on **premium** turnover, not notional. Charging it on
+  notional overstates costs by roughly the inverse of moneyness — an order of
+  magnitude, not a rounding error, and it is the more common mistake.
+- **STT** — sell side only, on premium, when squared off.
+- **GST** — on the *charges*, not the turnover. An ~18% surcharge on the fee
+  stack; STT and stamp duty are themselves taxes and are not taxed again.
+
+A two-leg spread is **four orders**, not two. Costing only the entry makes a
+strategy look viable at twice its real edge, and it is an easy mistake because
+the exit legs do not exist yet when the trade is being evaluated.
+
+### The claim that was wrong, and how it got caught
+
+The first draft's docstring asserted the folklore: that letting an ITM option
+expire is always ruinous and squaring off is always cheaper. **Its own arithmetic
+contradicted it on the first realistic example.**
+
+The size of the trap depends entirely on what base the exercise STT is levied
+on, and that base has not always been the same:
+
+| base | exercise STT | square-off cost | verdict |
+|---|---|---|---|
+| settlement value | ₹2,205 | ₹110 | square off — 20× |
+| intrinsic value | ₹49 | ₹110 | let it expire |
+
+Both computed on the same position — 75 units, 520 intrinsic, 23,520 settlement.
+`ExerciseBase` now makes the choice explicit and `should_square_off` costs both
+sides and names the base it assumed, because a backtest has to price an old
+trade under the rule in force at the time.
+
+Asserting the folklore would have been easy, plausible, and wrong in one of the
+two regimes. Computing it is what caught that.
+
+### And the rates are still placeholders
+
+`audit_cost_config` refuses to certify a profitability claim while
+`config/costs.yaml` still says TODO, and separately while slippage is
+uncalibrated. A total that is exact to the paisa in five terms and a guess in
+the sixth is a guess, and `CostBreakdown` propagates that: one uncalibrated
+component makes the whole sum uncalibrated.
+
+## M57 · the meta-labeller
+
+Its job is to say no. The target is **profit after costs**, not direction — a
+directionally correct call that does not clear its four orders is a zero, and
+that failure is invisible to every metric stopping at direction.
+
+| | approved | precision | expectancy/trade |
+|---|---|---|---|
+| take everything | 1200/1200 | 0.226 | −254 |
+| take the confident ones | 950/1200 | 0.231 | −245 |
+| **the model** | **313/1200** | **0.617** | **−109** |
+
+On random outcomes it approves **0%**.
+
+### The defect: the asymmetry was in the wrong place
+
+Skipping a good trade costs an opportunity; taking a bad one costs money and the
+capacity to take the next good trade. The obvious way to encode that is class
+weighting — duplicate the "skip" rows so the booster feels them more.
+
+It is measurably the wrong place. Weighting the fit set and then calibrating on
+the unweighted set puts two mechanisms in direct opposition: calibration's whole
+job is to make scores match observed frequencies, so it undoes the distortion
+the weighting introduced. Here it did worse than undo it —
+
+| skip weight | approval rate |
+|---|---|
+| 1 | 11% |
+| 4 | **30%** |
+
+— the exact opposite of the intent, silently, with every test still passing.
+
+The asymmetry now lives in the decision threshold, where it belongs: calibrate
+honestly, then take the trade when `P(pays) > loss_ratio / (1 + loss_ratio)`,
+the Bayes-optimal cut. `loss_ratio = 2` gives 0.67. The parameter now means
+something checkable, and a test asserts the direction rather than assuming it.
+
+### One more distinction worth keeping
+
+`passes` and `net_positive` are separate properties. On the synthetic world above
+the model earns its place completely — precision 0.23 → 0.62, loss per trade
+halved — and **the filtered book still loses money**, because the underlying
+calls had no edge to filter.
+
+A meta-labeller cannot manufacture an edge. It can only stop you paying costs on
+calls that were never going to cover them. Conflating those two is how a filter
+gets shipped on top of a strategy that has nothing underneath it.
