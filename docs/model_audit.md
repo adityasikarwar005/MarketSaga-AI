@@ -1099,3 +1099,83 @@ because an unexplained silence is indistinguishable from a broken alerter.
 And the suppressed list is kept rather than dropped: *nothing happened* and
 *forty things happened and were suppressed* look identical from the receiving
 end, and only one of them is a quiet day.
+
+---
+
+# M90 — the API gateway, 2026-08-28
+
+REST for what has already happened, a WebSocket for what is happening now. The
+split is not stylistic: history is a question with an answer, live state is a
+stream with no end, and serving the second over the first produces a dashboard
+that polls and a system that spends its time answering.
+
+## Backpressure is the requirement
+
+**A dashboard that cannot keep up must be dropped, not waited for.** If a slow
+client can make the publisher block, then opening a browser tab on bad wifi slows
+down the thing that places orders — a trading system whose latency depends on who
+is watching it.
+
+Both alternative designs fail: an unbounded queue turns a slow client into
+unbounded memory, a blocking send turns it into unbounded latency. So every
+client gets a bounded queue and a slow one loses frames.
+
+Dropping is also *correct* here, not merely pragmatic. The live channel carries
+**state**: a client that missed three updates does not need all three, it needs
+the current one. What it must never do is silently believe it is up to date —
+so drops are counted and a `gap` frame is sent with the next message. Silently
+resuming is how a dashboard ends up confidently displaying a stale position, and
+that is worse than a gap it can see.
+
+The queue is small (32) on purpose, and a test asserts it stays small: a client
+twenty frames behind wants the newest frame, not the backlog.
+
+## Auth, including in single-user mode
+
+The blueprint says "habits matter later" and it is right for a specific reason:
+the single-user version is the one that gets deployed to a laptop, then to a VPS
+"temporarily", and **the moment auth is optional it is absent**.
+
+- A missing token is a **startup failure**, not a generated default. A generated
+  token gets logged, copied once, and becomes permanent.
+- The comparison is `secrets.compare_digest`, because `==` leaks the length of
+  the matching prefix through timing.
+- The rejection says nothing about *which* part was wrong. "Invalid token" and
+  "no token" are different messages to a person and the same information to a
+  scanner.
+- The WebSocket is authenticated **before accept**, with close code 4401 rather
+  than a generic 1008 — a client reconnecting on a generic policy violation would
+  retry forever against a token that will never work.
+- `/health` is the only open route, because a health check that needs a
+  credential fails for the wrong reason when the credential is what broke.
+
+## The bug: postponed annotations broke FastAPI's parameter resolution
+
+The WebSocket route closed immediately with `1008 Field required`, which reads
+exactly like an auth rejection. It was not.
+
+This module uses `from __future__ import annotations`, so every annotation is a
+**string** that FastAPI resolves against the *module* globals. The `fastapi`
+imports were inside `create_app`, so `websocket: WebSocket` resolved to nothing
+and FastAPI reinterpreted the parameter as a required **query field**.
+
+The imports are now at module scope with a comment saying why they cannot move.
+A dependency-injection framework plus postponed annotations plus a factory
+function is a combination that fails quietly and blames the wrong layer.
+
+## And the project's own guard caught the next one
+
+The first version of this module used `datetime.now(UTC)` twice — once for a gap
+frame's timestamp, once for the ledger route's overdue check.
+`test_no_wall_clock_calls_outside_clock_module` failed, which is rule R6: library
+code never reads the wall clock, it takes a `Clock`.
+
+Worth stating why the API is not an exception. **Replay serves a recorded day
+through these same routes.** The ledger's "is this prediction overdue" answer
+depends entirely on what "now" is, so a route reaching for the wall clock would
+mark every prediction in a replayed day overdue — and would do it while looking
+completely correct.
+
+The clock is now injected into `create_app`, and a test in the API's own file
+asserts the module has no wall-clock reads, so the failure surfaces next to the
+code rather than in a distant architectural test.
