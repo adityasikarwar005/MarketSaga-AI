@@ -7,7 +7,7 @@ sdk: static
 app_file: index.html
 pinned: false
 license: mit
-short_description: Monitoring workspace for an event-driven options research system
+short_description: Monitoring workspace for an options research system
 ---
 
 # MarketSage Desk
