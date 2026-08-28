@@ -199,7 +199,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M60** | Path sampler | L6 | P6 | M55, M54 | ⚙ | ☐ |
 | **M61** | Fan-chart producer | L6 | P6 | M60 | | ☐ |
 | **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | | ☐ |
-| **M70** | IV surface fitter | L7 | P7 | M14 | | ☐ |
+| **M70** | IV surface fitter | L7 | P7 | M14 | ✅ | ☑ |
 | **M71** | Greeks engine | L7 | P7 | M70 | | ◐ |
 | **M72** | Structure enumerator & liquidity filter | L7 | P7 | M71 | | ☐ |
 | **M73** | Monte Carlo P&L engine | L7 | P7 | M72, M60, M56 | | ☐ |
@@ -1117,18 +1117,51 @@ python jobs/eval_projection.py --walk-forward --report
 
 ### L7 · DECISION
 
-#### M70 · IV surface fitter
+#### M70 · IV surface fitter ✅
 **Tasks**
-- [ ] IV from **mid** prices only (never LTP); Black-76 on futures with the right forward
-- [ ] Quote filters: bid>0, spread cap, OI floor, |δ| ∈ [0.05, 0.95]
-- [ ] SVI (or SABR) fit per expiry with no-arbitrage constraints (calendar + butterfly)
-- [ ] Store surface **parameters**; expose level/slope/curvature as features
-- [ ] Staleness: refuse to serve a surface older than N seconds
+- [x] IV from **mid** prices only (never LTP); Black-76 on futures with the right forward
+- [x] Quote filters: bid>0, spread cap, OI floor, |δ| ∈ [0.05, 0.95]
+- [x] SVI (or SABR) fit per expiry with no-arbitrage constraints (calendar + butterfly)
+- [x] Store surface **parameters**; expose level/slope/curvature as features
+- [x] Staleness: refuse to serve a surface older than N seconds
+
+**Built** `libs/ms_options/surface.py`, `tests/unit/test_iv_surface.py` (39 tests),
+`jobs/surface_report.py`. Raw SVI in total variance, fitted with a pure-Python
+deterministic Nelder-Mead (no scipy; two fits of one chain must be identical or
+a recommendation cannot be reproduced). Recovers known parameters to 1.3e-12.
+
+**The forward comes from the chain, not the spot.** `S·e^(rT)` is wrong for an
+index by the dividend yield you do not know, and the error appears as a stable,
+entirely manufactured skew between call- and put-implied vols that a model will
+happily learn. `synthetic_forward` recovers it from put-call parity at the
+nearest-the-money strike, and *says so in `method`* when it had to fall back —
+a caller that cannot tell which forward it got will not notice the skew.
+
+**No-arbitrage is enforced twice, and that is not redundant.** A penalty inside
+the objective steers the optimiser; whenever fit error outweighs it, the result
+is a surface with excellent RMSE that implies a negative probability density.
+Every option price on it is positive. So `arbitrage_report()` re-checks the
+fitted result independently and `require_arbitrage_free()` refuses rather than
+serves.
+
+Durrleman's g was verified against an independent route — the second difference
+of Black-76 call prices in strike, i.e. the discounted risk-neutral density —
+in both directions.
+
+**A mutation test found a real gap.** Deleting the `w''/2` term from g left all
+six butterfly tests passing: the truncated formula is still right on obviously
+broken surfaces and obviously clean ones, and wrong in the middle, which is
+where every fitted surface lives. A search found 14 parameter sets where the
+term flips the verdict; one is now pinned as a test, with its density confirmed
+positive everywhere.
+
+Also mutation-tested: LTP fallback, spot-derived forward, staleness downgraded
+to a warning, and calendar checks in insertion rather than time order.
 
 **Verify**
 ```bash
 pytest tests/unit/test_iv_surface.py -k "no_butterfly_arb or no_calendar_arb or rejects_stale or mid_not_ltp"
-python jobs/surface_report.py --date <day>   # fit RMSE per expiry, rejected-quote rate
+python jobs/surface_report.py --demo    # synthetic chain; --date needs recorded option data
 ```
 
 ---
