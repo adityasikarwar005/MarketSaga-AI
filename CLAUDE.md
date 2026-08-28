@@ -41,7 +41,12 @@ python tasks.py migrate       # hypertables and indexes
 
 **Postgres is published on 5433, not 5432.** A stock Windows PostgreSQL service owns 5432 and starts at boot; connecting there reaches *that* server and reports `password authentication failed`, which reads like a wrong credential and is a wrong server. See `docs/editor-setup.md`.
 
-Docker Desktop puts `docker.exe` in the **user** PATH, so a shell opened before installing it will not see the command.
+Docker Desktop's CLI is frequently **not on PATH at all**. On this machine it installs to
+`%LOCALAPPDATA%/Programs/DockerDesktop/resources/bin/docker.exe` — not `Program Files` —
+esourcesin\docker.exe` — not `Program Files` —
+and neither bash nor PowerShell finds it. `tasks.py` checks both locations before reporting
+Docker missing; it reported "install Docker Desktop" as an open blocker for a day while both
+containers were up and healthy and all 17 infra tests passed against them.
 
 Optional extras: `.[api]` (FastAPI, uvicorn, httpx, msgpack), `.[dev]`.
 

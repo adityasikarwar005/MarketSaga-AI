@@ -27,6 +27,7 @@ Cross-platform, no `make` required.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,42 @@ def setup() -> None:
     print("\nready. next:  python tasks.py test")
 
 
+def _docker() -> str | None:
+    """Path to docker.exe, or None.
+
+    `shutil.which` alone is not enough on Windows. Docker Desktop installs to
+    %LOCALAPPDATA%\Programs\DockerDesktop on current versions - not to
+    Program Files, which older docs say - and it adds its bin directory to the
+    *user* PATH, which a shell opened before the install never sees.
+
+    The failure that produced this: `tasks.py status` reported "install Docker
+    Desktop" as an open blocker for a day while both containers were up and
+    healthy and all 17 infrastructure tests passed against them. A blocker list
+    that names something already done is a blocker list people stop reading.
+    """
+    found = shutil.which("docker")
+    if found:
+        return found
+    candidates = [
+        Path(os.environ.get("LOCALAPPDATA", ""))
+        / "Programs"
+        / "DockerDesktop"
+        / "resources"
+        / "bin"
+        / "docker.exe",
+        Path(os.environ.get("PROGRAMFILES", ""))
+        / "Docker"
+        / "Docker"
+        / "resources"
+        / "bin"
+        / "docker.exe",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    return None
+
+
 def up() -> None:
     if shutil.which("docker") is None:
         sys.exit(
@@ -66,7 +103,10 @@ def up() -> None:
 
 
 def down() -> None:
-    run("docker", "compose", "down")
+    docker = _docker()
+    if docker is None:
+        sys.exit("docker not found on PATH or at either default install location")
+    run(docker, "compose", "down")
 
 
 def test() -> None:
@@ -160,7 +200,7 @@ def status() -> None:
         blockers.append("enable at least one news source (and record its ToS)")
     if any(s.source.startswith("TODO") for s in cfg.costs.schedules):
         blockers.append("replace placeholder cost rates with real statutory rates")
-    if shutil.which("docker") is None:
+    if _docker() is None:
         blockers.append("install Docker Desktop")
     captured = [p for p in (ROOT / "data").rglob("*") if p.is_file() and p.name != ".gitkeep"]
     if not captured:
