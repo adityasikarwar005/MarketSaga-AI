@@ -37,8 +37,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _py() -> str:
-    win = ROOT / ".venv" / "Scripts" / "python.exe"
-    return str(win) if win.exists() else str(ROOT / ".venv" / "bin" / "python")
+    """The interpreter to run stages with.
+
+    Prefers the repo's ``.venv`` when there is one, and falls back to the
+    interpreter already running - which is what a CI runner has, where the
+    dependencies are installed into the environment rather than into a venv.
+
+    Returning the venv path unconditionally is what this module did first, and
+    it failed on every CI run with ``No such file or directory: .venv/bin/python``
+    - a module whose entire premise is that a check should be reproducible
+    outside CI, written so that it only worked inside a local checkout.
+    """
+    for candidate in (
+        ROOT / ".venv" / "Scripts" / "python.exe",
+        ROOT / ".venv" / "bin" / "python",
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
 
 
 @dataclass(frozen=True)

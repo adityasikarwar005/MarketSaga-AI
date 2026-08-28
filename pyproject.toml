@@ -38,6 +38,7 @@ dev = [
     "ruff>=0.5",
     "black>=24.0",
     "mypy>=1.10",
+    "types-PyYAML>=6.0",   # mypy needs these to check config.py; CI installs only [dev]
     "pre-commit>=3.7",
 ]
 
@@ -88,5 +89,5 @@ disallow_untyped_defs = false
 # Optional dependencies with no stubs. They are imported lazily and only used
 # when the corresponding extra is installed, so a missing stub is expected.
 [[tool.mypy.overrides]]
-module = ["redis.*", "kiteconnect.*", "pandas.*", "duckdb.*", "pyarrow.*"]
+module = ["redis.*", "kiteconnect.*", "pandas.*", "duckdb.*", "pyarrow.*", "psycopg.*"]
 ignore_missing_imports = true
