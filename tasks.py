@@ -153,6 +153,18 @@ def restore_drill() -> None:
     run(_py(), str(ROOT / "jobs" / "restore_drill.py"), *args, check=False)
 
 
+def angel_check() -> None:
+    """Verify the Angel One credentials before a trading morning needs them.
+
+    `python tasks.py angel-check` stops before the network; add `--connect` to
+    log in for real. Run it the evening before - every failure it catches
+    otherwise shows up as a quiet feed during the opening auction.
+    """
+    _load_dotenv()
+    args = sys.argv[2:]
+    run(_py(), "jobs/angel_preflight.py", *args, check=False)
+
+
 def dashboard() -> None:
     """M91 - serve the dashboard.
 
@@ -433,6 +445,7 @@ COMMANDS = {
     "verify": verify,
     "ci": ci,
     "restore-drill": restore_drill,
+    "angel-check": angel_check,
     "dashboard": dashboard,
     "status": status,
 }

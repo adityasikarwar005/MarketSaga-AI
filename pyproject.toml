@@ -35,6 +35,14 @@ api = [
     "httpx>=0.27",           # the test client, and the only way to exercise the ASGI app
     "msgpack>=1.0",          # live-channel framing
 ]
+# The Angel One SmartAPI adapter. Separate because libs/ms_data/angelone.py
+# imports both lazily: the repository, the tests and CI all run without a broker
+# account, and the mutation tests for the adapter run without one too.
+broker = [
+    "smartapi-python>=1.4",
+    "pyotp>=2.9",          # the daily TOTP; the secret lives in .env, never here
+    "websocket-client>=1.7",
+]
 # Publishing the dashboard as a Hugging Face Space. Separate from everything
 # else because deploying is not part of building, and nothing in libs/ imports it.
 deploy = [
@@ -97,5 +105,14 @@ disallow_untyped_defs = false
 # Optional dependencies with no stubs. They are imported lazily and only used
 # when the corresponding extra is installed, so a missing stub is expected.
 [[tool.mypy.overrides]]
-module = ["redis.*", "kiteconnect.*", "pandas.*", "duckdb.*", "pyarrow.*", "psycopg.*"]
+module = [
+    "redis.*",
+    "kiteconnect.*",
+    "pandas.*",
+    "duckdb.*",
+    "pyarrow.*",
+    "psycopg.*",
+    "SmartApi.*",
+    "pyotp.*",
+]
 ignore_missing_imports = true

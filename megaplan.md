@@ -444,6 +444,21 @@ python -m services.ingest_market --dry-run --duration 300   # 5 min live, assert
 ```
 **Done:** forcibly kill the network for 20 s mid-session → reconnects, gap logged, no silent data loss.
 
+**Two adapters, one protocol.** `libs/ms_broker/kite.py` and
+`libs/ms_data/angelone.py` both implement `MarketFeed` and no consumer imports
+either. Angel One is the one credentials exist for. Its four vendor-specific
+traps are documented in the module docstring and each has a mutation-tested
+guard: prices arrive in **paise** (a 100x that stays internally consistent all
+the way downstream), the websocket wants the **feed token** and not the JWT (the
+wrong one connects and then delivers nothing), the scrip master's tokens belong
+to **one expiry** (M10's lookahead bug in vendor clothing), and there are **no
+sequence numbers**, so `GapDetector` is genuinely blind here rather than
+reporting zero gaps - `AngelOneFeed.gap_detection` returns `False` so that
+distinction is asked for rather than inferred.
+
+The tick counts as ingested when a real one has been recorded from a real
+session. Nothing in this repository has done that yet.
+
 ---
 
 #### M12 · Raw tick recorder
