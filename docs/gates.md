@@ -69,6 +69,94 @@ trial count above is what would make any later "improvement" honest. The gate is
 re-opened when intraday data exists, which is the change that would alter the
 answer rather than the estimate.
 
+### Update, 2026-08-28: ten years of real bars, and three more attempts
+
+The cached series were two years deep. Refetched at ten:
+
+| | sessions | span |
+|---|---|---|
+| before | 496 | 2024-08-27 .. 2026-08-27 |
+| after | **2 465** | 2016-08-30 .. 2026-08-28 |
+
+**Most of the deficit was data, not specification.** The same model, unchanged,
+on five times the history:
+
+| | CRPS | vs naive | cov90 |
+|---|---|---|---|
+| 2 years (previous best) | 0.002827 | **-13.7%** | 90.9% |
+| 10 years | 0.002421 | **-2.4%** | 86.8% |
+
+Eleven of the 13.7 points closed by having more of the same data. That is worth
+recording plainly: the earlier conclusion named a specification problem, and
+four fifths of it was sample size.
+
+The intervals stopped being calibrated in the process, and both models are
+affected - the naive baseline reads 86.5%. That is a real finding rather than a
+regression: two years of data was not enough to see it.
+
+#### Where the miscalibration actually lives
+
+Sliced by trailing volatility, on the model's own test forecasts:
+
+| regime | outcomes widen | model band | naive band | model cov90 | naive cov90 |
+|---|---|---|---|---|---|
+| quiet third | - | - | - | 89.1% | 93.8% |
+| busy third | **2.39x** | **1.50x** | **1.02x** | **81.4%** | **78.5%** |
+
+Both bands are far too rigid, and the naive one barely moves at all. The
+marginal 86% hides an interval that over-covers when it is quiet and misses
+badly when it is not - which is the direction that costs money, because a
+position sized off it is largest exactly when the band is most wrong.
+
+#### Three attempts on that, all logged, none passing
+
+**gap_v7 - volatility-scaled target.** Fit quantiles of `gap / sigma_hat` and
+rescale. It fixed the thing it targeted, busy-third coverage 77.5% -> 86.1%, and
+cost **26% of CRPS**: a 60-session trailing sigma is noisy and lagging, and
+dividing by it adds estimation variance that multiplying back does not remove.
+
+The same transform cost the naive baseline **47.6%**. So "the scaled model beats
+the scaled naive by 13.4%" is true and means nothing - it is a comparison
+between two models the same transform degraded, and it is exactly the shape a
+gate pass would take if nobody checked what the transform did to the baseline.
+
+**gap_v8 - adaptive penalty. VOID, measured nothing.** The audit's own diagnosis
+says a uniform penalty "taxes the one good feature exactly as hard as the
+twenty-seven useless ones", so a per-feature penalty was the obvious next test.
+It was faked by scaling feature columns - and `QuantileRegressor` standardises
+each column by its own training sigma, undoing the scaling exactly. The results
+were byte-identical to the uniform fit. Logged as an attempt because it was one.
+
+**gap_v9 - feature subsets.** The direct version of the same question. Top-k
+features by first-pass usage, ranked on the first training block only:
+
+| k | CRPS | vs naive |
+|---|---|---|
+| **1** (`US_EQ_FUT_ret`) | 0.002317 | **+1.0%** |
+| 2 | 0.002346 | -0.2% |
+| 3 | 0.002373 | -1.4% |
+| 6 | 0.002440 | -4.2% |
+| 12 | 0.002369 | -1.2% |
+
+**Skill peaks at one feature and decays monotonically.** The single-feature model
+beats the naive baseline for the first time, by 1.0%.
+
+That settles the penalty question without needing a penalty. The eleven other
+features are not underweighted - they are harmful, and no regulariser reaches a
+better answer than not having them. It also settles the loss-function question:
+CRPS ranked every variant correctly, including preferring the sharp
+miscalibrated model over the wide calibrated one, which is a proper scoring
+rule doing its job.
+
+**+1.0% against the +10% the gate asks for.** The conclusion is unchanged and
+now has a number behind it: at daily resolution this problem has roughly one
+variable's worth of signal in it, and the naive baseline already uses that
+variable. **The gate stays open and the answer is still intraday data.**
+
+Sixteen gap trials are now in `research/experiments.jsonl`. Pure noise tried
+sixteen times produces a best Sharpe near 1.8, and every later claim about this
+model is measured against that.
+
 ### Update, same day, after the model audit
 
 `docs/model_audit.md` found that the diagnosis above was wrong in its framing.

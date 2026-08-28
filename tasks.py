@@ -162,19 +162,32 @@ def dashboard() -> None:
     way acquires assumptions about that way.
     """
     import http.server
-    import socketserver
 
     root = ROOT / "services" / "dashboard"
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8787
 
     class Handler(http.server.SimpleHTTPRequestHandler):
+        # HTTP/1.1 so the browser may keep connections alive. On a
+        # single-threaded server that would make things worse, not better -
+        # it is safe only because of the threading server below.
+        protocol_version = "HTTP/1.1"
+
         def __init__(self, *a: object, **kw: object) -> None:
             super().__init__(*a, directory=str(root), **kw)  # type: ignore[arg-type]
 
         def log_message(self, fmt: str, *args: object) -> None:
             pass
 
-    with socketserver.TCPServer(("127.0.0.1", port), Handler) as srv:
+    # ThreadingHTTPServer, not TCPServer. A browser opens several connections
+    # in parallel and holds them open; a single-threaded server serialises
+    # them, and every request after the first waits on a socket timeout.
+    #
+    # The first version of this used TCPServer and the page took 173 seconds
+    # to load. That reads as "the dashboard is slow", which sends the
+    # investigation into the front end - the four assets themselves each
+    # returned in milliseconds under curl, one at a time.
+    with http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler) as srv:
+        srv.daemon_threads = True
         print(f"  MarketSage Desk on http://127.0.0.1:{port}  (ctrl-c to stop)")
         try:
             srv.serve_forever()
