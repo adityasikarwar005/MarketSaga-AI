@@ -218,7 +218,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M92** | Alerting | L9 | P8 | M90 | | ☑ |
 | **M93** | Paper ledger & outcome resolver | L9 | P8 | M80 | | ☑ |
 | **M94** | Attribution & calibration reports | L9 | P8 | M93 | | ☑ |
-| **M95** | Morning briefing product | L9 | P4 | M35 | | ☐ |
+| **M95** | Morning briefing product | L9 | P4 | M35 | ✅ | ☑ |
 | **MA0** | Orchestration (Prefect) | LX | P5 | M00 | | ☑ |
 | **MA1** | Daily rhythm jobs | LX | P8 | MA0 | | ☑ |
 | **MA2** | Retraining pipeline | LX | P8 | M5A, MA0 | ⚙ | ☑ |
@@ -1609,11 +1609,45 @@ pytest tests/unit/test_kill_policy.py -k "auto_disables or requires_change_to_re
 
 ---
 
-#### M95 · Morning briefing product
+#### M95 · Morning briefing product ✅
 **The first thing you ship to a real user (yourself).**
-- [ ] Runs 06:30 IST daily: overnight events, gap forecast distribution, key levels, today's calendar
-- [ ] Delivered as a push/email/markdown file
-- [ ] Scored daily against the actual open
+- [x] Runs 06:30 IST daily: overnight events, gap forecast distribution, key levels, today's calendar
+- [x] Delivered as a push/email/markdown file
+- [x] Scored daily against the actual open
+
+**Built** `libs/ms_ops/briefing.py`, `tests/unit/test_briefing.py` (28 tests),
+`jobs/morning_briefing.py`.
+
+**The gate says *20 consecutive* briefings, and "consecutive" is the word that
+does the work.** Counting records gives twenty for a system that ran on twenty
+scattered mornings across three months — which satisfies the sentence and
+answers a different question. `consecutive_streak` walks trading days backwards
+from the latest session and stops at the first with no briefing. A holiday is
+skipped rather than counted as a miss: a streak that reset every Diwali would
+never reach twenty, which is the failure people notice — unlike a scattered
+count reaching it while proving nothing.
+
+**Published before the open, scored after it.** `publish` refuses once the
+session has opened, against an **injected clock** (R6): a replayed morning must
+produce the briefing it would have produced, and one stamped with today's time
+while forecasting March is not a record of a forecast. The score is a
+**separate later record** pointing back by id — writing it into the briefing
+would make that file a place where a published forecast can be edited once the
+answer is known.
+
+The gate also fails while any briefing is unscored. A forecast nobody checked
+is a claim nobody tested, and a run of those is the shape of a system that looks
+operational and is not.
+
+`GapForecast.calibrated` survives into the text a person reads. A 90% band that
+is not a 90% band is the most misleading thing a briefing can carry — it is
+wrong in the direction that makes the reader more confident.
+
+`--dry-run` records nothing, so a rehearsal cannot pad the streak.
+
+Mutation-tested: counting records instead of walking days, publishing after the
+open, a holiday breaking the streak, unscored briefings ignored, a second
+briefing for one morning, and the uncalibrated label dropped. All six caught.
 
 **Verify** `python jobs/morning_briefing.py --dry-run` · 20 consecutive automated briefings → part of **Gate G4**
 
