@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-26T20:07:37.805557+00:00",
+  "fetched_at": "2026-08-28T18:36:32.515052+00:00",
   "holidays": [
     {
       "confidence": "single",
@@ -101,12 +101,13 @@
       ]
     },
     {
-      "confidence": "single",
+      "confidence": "confirmed",
       "day": "2026-06-26",
       "note": "",
       "reason": "Muharram",
       "sources": [
-        "nse"
+        "nse",
+        "inferred"
       ]
     },
     {

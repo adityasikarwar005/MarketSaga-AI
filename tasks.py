@@ -153,6 +153,16 @@ def restore_drill() -> None:
     run(_py(), str(ROOT / "jobs" / "restore_drill.py"), *args, check=False)
 
 
+def bhavcopy() -> None:
+    """M14 - backfill NSE F&O bhavcopy into the local cache.
+
+    `python tasks.py bhavcopy --days 30` or `--from YYYY-MM-DD --to YYYY-MM-DD`.
+    One request per session, cached, never re-fetched. Eight years is about two
+    thousand requests to a free public archive, so the default is thirty days.
+    """
+    run(_py(), "jobs/bhavcopy_backfill.py", *sys.argv[2:], check=False)
+
+
 def angel_check() -> None:
     """Verify the Angel One credentials before a trading morning needs them.
 
@@ -445,6 +455,7 @@ COMMANDS = {
     "verify": verify,
     "ci": ci,
     "restore-drill": restore_drill,
+    "bhavcopy": bhavcopy,
     "angel-check": angel_check,
     "dashboard": dashboard,
     "status": status,

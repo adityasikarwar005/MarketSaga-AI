@@ -29,6 +29,7 @@ from libs.ms_data.holidays import (
     NseHolidayProvider,
     describe_day,
     next_holiday,
+    observed_trading_days_from_bhavcopy,
     observed_trading_days_from_recordings,
     staleness_days,
 )
@@ -41,14 +42,31 @@ def sync(years: list[int], *, strict: bool) -> int:
     cfg = cfgmod.load(warn=False)
     store = HolidayStore()
 
-    observed = observed_trading_days_from_recordings(DATA_ROOT)
+    # Two independent statements that a day was open: our own recordings, and
+    # the exchange having published a bhavcopy for it. The second needs nothing
+    # recorded and reaches back years, which is what lets a published holiday
+    # list be corroborated rather than merely trusted.
+    recorded = observed_trading_days_from_recordings(DATA_ROOT)
+    from_bhavcopy = observed_trading_days_from_bhavcopy()
+    observed = recorded | from_bhavcopy
     providers = [
         ManualHolidayProvider(dict(cfg.sessions.holidays)),
         NseHolidayProvider(),
         InferredHolidayProvider(observed),
     ]
+    # NSE's holiday endpoint serves only the current year. A past year therefore
+    # comes back with nothing, and a file with zero holidays is deliberately NOT
+    # treated as a loaded year (see HolidayStore.as_calendar_dict) - no exchange
+    # closes for nothing, and letting one through turns the calendar's refusal to
+    # guess into a confident wrong answer. Reconstruct a past year by backfilling
+    # bhavcopy across it instead: `python tasks.py bhavcopy --from --to`.
     if observed:
-        print(f"  cross-checking against {len(observed)} recorded trading days")
+        parts = []
+        if recorded:
+            parts.append(f"{len(recorded)} recorded")
+        if from_bhavcopy:
+            parts.append(f"{len(from_bhavcopy)} with a published bhavcopy")
+        print(f"  cross-checking against {len(observed)} trading days ({', '.join(parts)})")
     else:
         print("  no recorded days yet - the published list cannot be cross-checked")
 

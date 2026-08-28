@@ -14,13 +14,17 @@ from libs.ms_core.clock import CalendarNotLoadedError, FrozenClock, SessionCalen
 from libs.ms_data.holidays import (
     Confidence,
     Coverage,
+    Holiday,
     HolidayStore,
+    HolidayYear,
     InferredHolidayProvider,
     ManualHolidayProvider,
     NseHolidayProvider,
+    ReconciledHoliday,
     Source,
     describe_day,
     next_holiday,
+    observed_trading_days_from_bhavcopy,
     observed_trading_days_from_recordings,
     parse_nse_date,
     parse_nse_payload,
@@ -297,3 +301,151 @@ def test_config_pins_survive_a_discovered_calendar(cfg, store, clock):
 
     assert merged.is_trading_day(date(2026, 3, 4)) is False  # the pin
     assert merged.is_trading_day(date(2026, 1, 26)) is False  # the discovery
+
+
+class TestWeekendHolidaysAreNotDisputes:
+    """A holiday on a Saturday can never be corroborated by observation.
+
+    InferredHolidayProvider only ever infers holidays on weekdays, so if it
+    claims to cover weekends it counts as silent about every weekend holiday -
+    and reconcile reads silence from a covering source as disagreement.
+
+    Found on real data: Independence Day 2026 falls on a Saturday and was
+    reported DISPUTED, asking a human to check an exchange circular. It would
+    happen for every weekend holiday, every year. A warning that is always
+    wrong trains people to ignore the ones that are right.
+    """
+
+    def _observed(self) -> set[date]:
+        # A full trading month, weekends absent as they always are.
+        days = set()
+        cursor = date(2026, 8, 3)
+        while cursor <= date(2026, 8, 28):
+            if cursor.weekday() < 5:
+                days.add(cursor)
+            cursor += timedelta(days=1)
+        return days
+
+    def test_a_saturday_is_outside_the_inferred_provider_s_coverage(self) -> None:
+        provider = InferredHolidayProvider(self._observed())
+        cov = provider.coverage(2026)
+        assert not cov.covers(date(2026, 8, 15)), "Saturday"
+        assert not cov.covers(date(2026, 8, 16)), "Sunday"
+        assert cov.covers(date(2026, 8, 14)), "Friday, inside the span"
+
+    def test_a_weekend_holiday_is_not_flagged_disputed(self) -> None:
+        provider = InferredHolidayProvider(self._observed())
+        nse = [Holiday(day=date(2026, 8, 15), reason="Independence Day", source=Source.NSE)]
+        merged = reconcile(
+            {Source.NSE: nse, Source.INFERRED: provider.fetch(2026)},
+            coverage={Source.NSE: Coverage.everything(), Source.INFERRED: provider.coverage(2026)},
+        )
+        (independence,) = [h for h in merged if h.day == date(2026, 8, 15)]
+        assert independence.confidence is not Confidence.DISPUTED
+        assert independence.note == ""
+
+    def test_a_weekday_the_exchange_claims_but_we_traded_through_is_still_disputed(
+        self,
+    ) -> None:
+        """The guard must not swallow the case it exists for.
+
+        A Tuesday inside the recorded span, claimed as a holiday by the exchange
+        while we have data for it, is a real disagreement and must stay one.
+        """
+        provider = InferredHolidayProvider(self._observed())
+        claimed = date(2026, 8, 11)
+        assert claimed.weekday() < 5 and claimed in self._observed()
+        merged = reconcile(
+            {
+                Source.NSE: [Holiday(day=claimed, reason="claimed", source=Source.NSE)],
+                Source.INFERRED: provider.fetch(2026),
+            },
+            coverage={Source.NSE: Coverage.everything(), Source.INFERRED: provider.coverage(2026)},
+        )
+        (row,) = [h for h in merged if h.day == claimed]
+        assert row.confidence is Confidence.DISPUTED
+
+
+class TestBhavcopyAsAnObservationSource:
+    """The exchange publishes a bhavcopy for every session and for nothing else.
+
+    That makes a cached bhavcopy a statement by the exchange that it traded
+    that day - the same signal as our own recordings, available for years back
+    without having recorded anything, which is what lets a published holiday
+    list be corroborated instead of merely trusted.
+    """
+
+    def test_cached_days_are_read_from_the_filenames(self, tmp_path) -> None:
+        for name in ("2026-08-26.json", "2026-08-27.json"):
+            (tmp_path / name).write_text("{}", encoding="utf-8")
+        got = observed_trading_days_from_bhavcopy(tmp_path)
+        assert got == {date(2026, 8, 26), date(2026, 8, 27)}
+
+    def test_a_file_that_is_not_a_date_is_ignored_not_fatal(self, tmp_path) -> None:
+        (tmp_path / "2026-08-26.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "README.json").write_text("{}", encoding="utf-8")
+        assert observed_trading_days_from_bhavcopy(tmp_path) == {date(2026, 8, 26)}
+
+    def test_a_missing_cache_is_empty_not_an_error(self, tmp_path) -> None:
+        """No cache means no observations, which is different from a claim that
+        the market was shut on every day."""
+        assert observed_trading_days_from_bhavcopy(tmp_path / "nope") == set()
+
+
+class TestAnEmptyYearIsNotALoadedYear:
+    """Running the sync must never leave the system less correct than not running it.
+
+    NSE's holiday endpoint serves only the current year, so syncing past years
+    writes files with zero holidays. Handing those to the calendar replaces its
+    refusal to guess - the entire point of SessionCalendar - with a confident
+    wrong answer: is_trading_day(2023-01-26) returns True, and Republic Day, a
+    Thursday, silently becomes a session.
+
+    No exchange closes for nothing. An empty list means the providers had
+    nothing to say, not that the market never shut.
+    """
+
+    def _store(self, tmp_path, years: dict[int, list[date]]) -> HolidayStore:
+        store = HolidayStore(tmp_path)
+        for year, days in years.items():
+            store.save(
+                HolidayYear(
+                    year=year,
+                    holidays=[
+                        ReconciledHoliday(
+                            day=d,
+                            reason="test",
+                            sources=[Source.NSE],
+                            confidence=Confidence.SINGLE,
+                        )
+                        for d in days
+                    ],
+                    fetched_at="2026-08-28T00:00:00+00:00",
+                )
+            )
+        return store
+
+    def test_a_year_with_no_holidays_is_left_out(self, tmp_path) -> None:
+        store = self._store(tmp_path, {2023: [], 2026: [date(2026, 6, 26)]})
+        assert set(store.as_calendar_dict()) == {2026}
+
+    def test_the_calendar_still_refuses_the_empty_year(self, tmp_path) -> None:
+        """The refusal is the feature. It must survive a sync that found nothing."""
+        import warnings
+
+        from libs.ms_core import config as cfgmod
+
+        store = self._store(tmp_path, {2023: [], 2026: [date(2026, 6, 26)]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            base = SessionCalendar.from_config(cfgmod.load().sessions)
+        cal = base.with_holidays(store.as_calendar_dict())
+
+        assert cal.is_trading_day(date(2026, 8, 26)) is True
+        assert cal.is_trading_day(date(2026, 6, 26)) is False
+        with pytest.raises(CalendarNotLoadedError):
+            cal.is_trading_day(date(2023, 1, 26))
+
+    def test_a_populated_year_is_unaffected(self, tmp_path) -> None:
+        store = self._store(tmp_path, {2026: [date(2026, 6, 26), date(2026, 8, 15)]})
+        assert store.as_calendar_dict() == {2026: frozenset({date(2026, 6, 26), date(2026, 8, 15)})}

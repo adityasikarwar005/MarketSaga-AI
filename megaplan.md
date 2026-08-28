@@ -540,6 +540,38 @@ python jobs/verify_chain.py --date <day>
 ```
 **Traps:** the spot price must be captured *with* the chain, not joined later. Joining introduces a lag you cannot undo.
 
+**A historical source, until a live one exists.** `libs/ms_data/bhavcopy.py`
+loads NSE's own F&O bhavcopy: every listed contract's strike, expiry, close,
+settlement, OI and volume, for every session back to 2018, free and with no
+broker account. It is **daily, not intraday**, and it has **no book at all** -
+`OptionQuote.mid` is correctly `None` on every quote it produces, because a
+bhavcopy cannot supply one and manufacturing a mid from a single price is worse
+than not having one.
+
+The defect it exists to prevent, measured on the real NIFTY chain for
+2026-08-26: of 1,584 listed contracts **857 (54%) never traded**, and every one
+of them still carries both a close and a settlement price computed by the
+exchange. On those, the two numbers disagree by a **median 15.9%**, 78% at p90,
+2273% at worst. Fitting SVI to all 1,584 would fit NSE's own model on more than
+half the points, converge, and report a smile nothing traded at - a working
+pipeline, plausible numbers, no error. So `traded_only` defaults to True, the
+dropped count is *returned* rather than logged, and there is no `price` property
+that silently picks close or settlement.
+
+Two formats, and the trap sits in the difference: UDiFF (2024 onward) carries
+`UndrlygPric`, the legacy format carries no spot at all. A chain built from a
+legacy file therefore **refuses to construct** without an explicit spot rather
+than joining one from elsewhere - the trap named directly above this paragraph.
+Verified on real files: 2026-08-26 builds, 2023-06-09 refuses.
+
+`available_at()` returns the morning after the session, deliberately
+conservative: too early is lookahead that silently inflates a backtest, too late
+costs one day.
+
+Not a new module - M14's contract is unchanged and this is a second source
+behind it. The tick still counts as ingested only when a real one has been
+recorded live, and nothing here has done that.
+
 ---
 
 #### M15 · Cross-asset collector

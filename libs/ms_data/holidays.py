@@ -258,14 +258,27 @@ class InferredHolidayProvider(HolidayProvider):
         return Source.INFERRED
 
     def coverage(self, year: int) -> Coverage:
-        """Only the span actually recorded. Outside it we know nothing."""
+        """Weekdays inside the recorded span. Outside it, and on weekends, nothing.
+
+        The weekday restriction is not a detail. ``fetch`` only ever infers
+        holidays on weekdays, so claiming to cover a Saturday means this source
+        counts as *silent* about every holiday that falls on one - and
+        ``reconcile`` reads silence from a covering source as disagreement.
+
+        The effect, before this was fixed: Independence Day 2026 falls on a
+        Saturday, and it was reported DISPUTED with "verify against the exchange
+        circular". Every weekend holiday would be, every year, forever. A
+        warning that is always wrong is worse than no warning, because it
+        teaches people to skip the ones that are right.
+        """
         in_year = {d for d in self._observed if d.year == year}
         if not in_year:
             return Coverage.nothing()
         start, end = min(in_year), max(in_year)
         days, cursor = set(), start
         while cursor <= end:
-            days.add(cursor)
+            if cursor.weekday() < 5:
+                days.add(cursor)
             cursor += timedelta(days=1)
         return Coverage(frozenset(days))
 
@@ -443,8 +456,41 @@ class HolidayStore:
         return sorted(out)
 
     def as_calendar_dict(self) -> dict[int, frozenset[date]]:
-        """The shape :class:`SessionCalendar` wants."""
-        return {y: frozenset(e.dates()) for y in self.years() if (e := self.load(y)) is not None}
+        """The shape :class:`SessionCalendar` wants - minus the empty years.
+
+        **A year with zero holidays is not a loaded year.** No exchange closes
+        for nothing, so an empty list means the providers had nothing to say
+        about that year, not that the market never shut.
+
+        This distinction is load-bearing and was found the hard way. NSE's
+        holiday endpoint serves only the current year, so syncing 2023-2025
+        writes three files with zero holidays each. Handing those to the
+        calendar replaces `CalendarNotLoadedError` - a refusal to guess, which
+        is the entire design of `SessionCalendar` - with a confident
+        `is_trading_day(2023-01-26) == True`. Republic Day, a Thursday, silently
+        becomes a session. Running the sync would then leave the system *less*
+        correct than never having run it, which is the worst possible shape for
+        a maintenance command to have.
+
+        Populate a past year by backfilling bhavcopy across it: the exchange
+        publishes one for every session and none for a holiday, so
+        `InferredHolidayProvider` can reconstruct a year the endpoint no longer
+        serves. Reason-free, but right.
+        """
+        out: dict[int, frozenset[date]] = {}
+        for y in self.years():
+            entry = self.load(y)
+            if entry is None:
+                continue
+            days = frozenset(entry.dates())
+            if not days:
+                log.warning(
+                    "holiday year has no holidays, treating it as not loaded",
+                    fields={"year": y, "path": str(self.path(y))},
+                )
+                continue
+            out[y] = days
+        return out
 
     # -- sync ---------------------------------------------------------------
     def sync(
@@ -554,6 +600,38 @@ def observed_trading_days_from_recordings(root: Path) -> set[date]:
             continue
         if any(f.stat().st_size > 0 for f in part.glob("*.ndjson")):
             out.add(day)
+    return out
+
+
+def observed_trading_days_from_bhavcopy(root: Path | None = None) -> set[date]:
+    """Which days the exchange itself published a bhavcopy for.
+
+    A far stronger cross-check than the recorder's own layout, and available
+    without having recorded anything: NSE publishes an F&O bhavcopy for every
+    session and for no other day, going back years. So a cached bhavcopy is a
+    statement by the exchange that it traded that day - which is exactly what
+    :class:`InferredHolidayProvider` needs to turn a published holiday list from
+    "announced" into "announced and independently corroborated".
+
+    Directory listing only; no file is opened, so this stays fast as the cache
+    fills. The span matters as much as the days: the provider infers holidays
+    only *between* the earliest and latest day it can see, because a day nobody
+    downloaded is not a day the market was shut.
+    """
+    from libs.ms_data.bhavcopy import BHAVCOPY_CACHE
+
+    base = root if root is not None else BHAVCOPY_CACHE
+    out: set[date] = set()
+    # glob on a missing directory already yields nothing, so this is a statement
+    # of intent rather than protection - kept to match the sibling function
+    # above. The behaviour it describes is pinned by a test either way.
+    if not base.exists():
+        return out
+    for f in base.glob("*.json"):
+        try:
+            out.add(date.fromisoformat(f.stem))
+        except ValueError:
+            continue
     return out
 
 
