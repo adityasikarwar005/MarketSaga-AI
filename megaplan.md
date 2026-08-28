@@ -162,8 +162,8 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M17** | Parquet archive + DuckDB research layer | L1 | P1 | M16 | | ☑ |
 | **M18** | Replay engine | L1 | P1 | M17, M02, M04 | | ☑ |
 | **M19** | Data quality gates | L1 | P1 | M16 | | ☑ |
-| **M20** | Source registry & credibility weights | L2 | P2 | M01 | | ☐ |
-| **M21** | Collector framework | L2 | P2 | M04, M20 | | ☐ |
+| **M20** | Source registry & credibility weights | L2 | P2 | M01 | ✅ | ☑ |
+| **M21** | Collector framework | L2 | P2 | M04, M20 | ✅ | ☑ |
 | **M22** | Normaliser & publish-time resolver | L2 | P2 | M21 | | ☐ |
 | **M23** | Deduplication | L2 | P2 | M22 | ⚙ | ☐ |
 | **M24** | Economic calendar & consensus | L2 | P2 | M21 | | ☐ |
@@ -586,22 +586,83 @@ pytest tests/unit/test_qc.py -k "detects_injected_gap or detects_bad_iv"
 
 ### L2 · NEWS & EVENTS
 
-#### M20 · Source registry & credibility
+#### M20 · Source registry & credibility ✅
 **Tasks**
-- [ ] `config/sources.yaml`: id, name, class, credibility `c`, expected lag, terms-of-service notes
-- [ ] Credibility tiers per blueprint Ch.5 §Source catalogue
-- [ ] Per-source rate limits and quota tracking
+- [x] `config/sources.yaml`: id, name, class, credibility `c`, expected lag, terms-of-service notes
+- [x] Credibility tiers per blueprint Ch.5 §Source catalogue
+- [x] Per-source rate limits and quota tracking
+
+**Built** `libs/ms_news/sources.py`, `tests/unit/test_sources.py` (28 tests).
+The schema and the low-credibility rule were already in `ms_core/config.py`;
+this adds tiers, rate limits, quota and readiness.
+
+**A rate limit that records calls after making them is a log, not a limiter.**
+`Budget.take` refuses *before* the request. The block it fails to prevent
+arrives on the morning the news matters, because that is the morning the poller
+is busiest. Quota windows are **wall-clock aligned** — a provider's "1 000 per
+day" resets at their midnight, and a rolling window silently allows nearly
+double across the boundary while looking like ordinary traffic. `min_interval`
+is enforced separately from the quota: honouring only the quota fires a hundred
+requests in the window's first second and gets blocked having used a tenth of
+its allowance.
+
+**Tier comes from the credibility number, not the `source_class` string.** A
+class string is a label somebody typed; the credibility is the weight
+everything downstream applies, and letting them disagree means the tier in a
+report is not the tier the scorer used.
+
+`can_open_directional` re-checks credibility itself rather than trusting the
+config flag. **A mutation test found this**: the cross-field rule lives on
+`SourcesConfig`, so a bare `Source` can be constructed claiming
+`may_trigger_directional=True` at 0.25 — by a fixture, by hand, by a future
+loader. Dropping the credibility half of the check broke nothing, because every
+other test used a source that already said `False`.
+
+All six shipped sources remain `enabled: false` with `TODO` ToS notes, and
+`readiness()` says so. **That is the configured state, not a fault** — reading a
+provider's terms is not a coding task.
 
 **Verify** `pytest tests/unit/test_sources.py -k "weights_in_range or all_have_tos_note"`
 
 ---
 
-#### M21 · Collector framework
+#### M21 · Collector framework ✅
 **Tasks**
-- [ ] Pluggable `Collector` base: `poll()` / `stream()`, retries, backoff, health heartbeat
-- [ ] One collector per source; failure in one never affects others
-- [ ] Emits `RawNewsItem` to `raw.news`
-- [ ] Per-source metrics: items/min, error rate, last-success age
+- [x] Pluggable `Collector` base: `poll()` / `stream()`, retries, backoff, health heartbeat
+- [x] One collector per source; failure in one never affects others
+- [x] Emits `RawNewsItem` to `raw.news`
+- [x] Per-source metrics: items/min, error rate, last-success age
+
+**Built** `libs/ms_news/collectors.py`, `tests/unit/test_collectors.py` (26 tests).
+
+**Isolation is the whole point, and its failure is misdiagnosed.** A single loop
+letting one exception escape stops every source after the one that threw — and
+the symptom is that the *others* went quiet, which reads as a network problem
+and sends the investigation somewhere else entirely.
+
+**Backoff resets on success**, or a source that failed twice at breakfast is
+still throttled at noon and the courtesy has become an outage of our own making.
+It is **jittered** so N collectors that failed during one provider outage do not
+all return the instant it ends and re-create the load that caused it — and the
+jitter is seeded, because a test that cannot reproduce a backoff schedule cannot
+check one. Backing off *skips the poll* rather than recording that it made one.
+
+**The heartbeat measures silence since the last success, not the last attempt.**
+A collector erroring every thirty seconds is not silent; one succeeding-but-empty
+is, and it is the second that looks healthy. Staleness is reported as a number
+for a human rather than a halt: forty minutes of silence at 10 a.m. is an
+outage and the same forty minutes at 3 a.m. is a Sunday, and the framework
+cannot tell.
+
+An item stamped with the wrong `source_id` is refused, not published — it would
+inherit the wrong credibility, and credibility decides whether it can open a
+position. Two collectors on one source are refused: they double every item and
+each copy looks like corroboration for the other.
+
+`FailingCollector` ships in the library, not the tests — same reasoning as the
+kill drill's stubborn broker.
+
+Mutation-tested seven guards, all caught.
 
 **Verify**
 ```bash
