@@ -112,9 +112,9 @@ def test_the_reference_bins_are_fixed_and_that_is_what_detects_the_shift(rng: ra
     refitted = build_reference("gap", shifted)
     against_refitted_bins = psi(refitted, shifted)
 
-    assert against_fixed_bins >= PSI_BREACH, (
-        f"a 0.9-sigma shift scored {against_fixed_bins:.4f} against fixed bins"
-    )
+    assert (
+        against_fixed_bins >= PSI_BREACH
+    ), f"a 0.9-sigma shift scored {against_fixed_bins:.4f} against fixed bins"
     assert against_refitted_bins < PSI_WATCH, (
         "the refitted-bin comparison was supposed to be blind to this shift; if it "
         "is not, this test no longer demonstrates anything"

@@ -151,7 +151,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M04** | Event bus (Redis Streams) | L0 | P0 | M03 | | ☑ |
 | **M05** | Observability (logs, traces, metrics) | L0 | P0 | M00 | | ☑ |
 | **M06** | Secrets & environment isolation | L0 | P0 | M00 | | ☑ |
-| **M10** | Instrument master & calendars | L1 | P0 | M01 | | ◐ |
+| **M10** | Instrument master & calendars | L1 | P0 | M01 | ✅ | ☑ |
 | **M11** | Market feed adapter | L1 | P0 | M04, M10 | | ☑ |
 | **M12** | Raw tick recorder | L1 | P0 | M11 | | ☑ |
 | **M13** | Candle builder | L1 | P1 | M12, M02 | | ☑ |
@@ -223,8 +223,8 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **MA1** | Daily rhythm jobs | LX | P8 | MA0 | | ☑ |
 | **MA2** | Retraining pipeline | LX | P8 | M5A, MA0 | ⚙ | ☑ |
 | **MA3** | Drift monitors | LX | P8 | M94 | ✅ | ☑ |
-| **MA4** | CI pipeline | LX | P1 | M18, M43 | | ☐ |
-| **MA5** | Backup & restore | LX | P1 | M16 | | ☐ |
+| **MA4** | CI pipeline | LX | P1 | M18, M43 | ✅ | ☑ |
+| **MA5** | Backup & restore | LX | P1 | M16 | ✅ | ☑ |
 
 **Count:** 79 modules · 20 carry AI/ML · 16 model cards in section 4 · every module has a verify block below.
 
@@ -385,13 +385,38 @@ pytest tests/unit/test_env_isolation.py -k "research_cannot_reach_broker or live
 
 ### L1 · MARKET DATA
 
-#### M10 · Instrument master & calendars
+#### M10 · Instrument master & calendars ✅
 **Owns:** the canonical identity of every tradable thing.
 
 **Tasks**
-- [ ] `instrument` table: id, symbol, exchange token, type, lot size, tick size, expiry, strike, underlying
-- [ ] Expiry calendar (weekly + monthly), holiday calendar
-- [ ] Symbol → id resolution with historical validity intervals (symbols get reused!)
+- [x] `instrument` table: id, symbol, exchange token, type, lot size, tick size, expiry, strike, underlying
+- [x] Expiry calendar (weekly + monthly), holiday calendar
+- [x] Symbol → id resolution with historical validity intervals (symbols get reused!)
+
+**Built** `libs/ms_data/instruments.py`, `tests/unit/test_instruments.py` (35 tests).
+The holiday calendar was already in `ms_data/holidays.py` and the lot-size history
+in `Instrument.lot_size_on`; what was missing was contract identity.
+
+The trap above is stated for lot sizes and applies more sharply to the symbols
+themselves. A stale lot size scales a number; a reused symbol attaches it to the
+wrong contract entirely. So `resolve_at_date` takes a date and there is no
+overload without one — a default of "today" silently re-points every historical
+lookup at whatever currently holds the string, and the answer is still a real
+contract with a real price.
+
+The indexes are **lists, not dicts**. A dict keyed by tradingsymbol is the
+structure that makes reuse invisible: the second contract overwrites the first,
+the master reports one entry, and every earlier trade resolves to the later
+contract without anything failing. Exchange tokens get the same treatment —
+brokers recycle them — which is why stored records reference `instrument_id`,
+the one identifier that may never be reused.
+
+Expiry rolls **backwards** off a holiday, never forwards. Forwards settles a
+contract after the date printed on it, and a daily-close backtest never shows
+it: the position simply appears to survive a day longer than it could have.
+
+Mutation-tested: date-blind resolution, forward-rolling expiry, and date-blind
+lot size each break three tests.
 
 **Verify**
 ```bash
@@ -1376,8 +1401,8 @@ pytest tests/unit/test_kill_policy.py -k "auto_disables or requires_change_to_re
 | **MA1** | Daily rhythm | 06:30 briefing · 08:45 preflight · session · 15:20 forced flatten · 15:45 post-session · 18:00 nightly | `pytest tests/integration/test_daily_rhythm.py` |
 | **MA2** | Retraining | Weekly incremental, quarterly full; promote only if it beats incumbent on last 4 weeks OOS | `python jobs/retrain.py --dry-run --report` |
 | **MA3** ✅ | Drift monitors | Feature PSI, prediction-distribution KL, rolling Brier; breach blocks auto-execution | `pytest tests/unit/test_drift.py -k "psi_breach_blocks_auto"` |
-| **MA4** | CI pipeline | On every commit: unit + determinism + parity + leakage lint + AP-hack + stress | CI green badge |
-| **MA5** | Backup & restore | Nightly dump + Parquet sync; **monthly restore drill on a clean machine** | `python jobs/restore_drill.py --target clean-vm` |
+| **MA4** ✅ | CI pipeline | On every commit: unit + determinism + parity + leakage lint + AP-hack + stress | `python tasks.py ci` · `.github/workflows/ci.yml` |
+| **MA5** ✅ | Backup & restore | Nightly dump + Parquet sync; **monthly restore drill on a clean machine** | `python jobs/restore_drill.py --target clean-vm` · `--self-test` |
 
 ---
 
@@ -1628,7 +1653,7 @@ Sprints are two weeks. Gate references are `docs/gates.md`.
 |---|---|---|---|
 | S1 | 1–2 | M00 M01 M02 M03 M06 M10 M11 **M12** M14 | **G0** |
 | S2 | 3–4 | M04 M05 M16 M13 | |
-| S3 | 5–6 | M17 M18 M19 M15 MA4 MA5 | **G1** |
+| S3 | 5–6 | M17 M18 M19 M15 MA4 MA5 | **G1** · MA4/MA5 ✅ |
 | S4 | 7–8 | M20 M21 M22 | |
 | S5 | 9–10 | M23 M24 M25 | **G2** |
 | S6 | 11–12 | M26 gold-set labelling (start early, it is slow) | |

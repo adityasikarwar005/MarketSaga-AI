@@ -1,0 +1,140 @@
+# MA4 - the CI pipeline.
+#
+# Six stages, each a separate job, because `pytest -q` over everything gives one
+# number and one number cannot say which guarantee broke. "Determinism failed"
+# and "the stress suite failed" call for entirely different reactions.
+#
+# The stage definitions live in jobs/ci_stages.py, not here. A check that exists
+# only inside a workflow file is one nobody can reproduce when it fails, and the
+# first thing anyone does with a red CI run is try to reproduce it locally.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  MS_ENV: research   # research cannot hold credentials; see libs/ms_core/env.py
+
+jobs:
+  gate:
+    name: lint + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: ruff
+        run: python -m ruff check .
+      - name: black
+        run: python -m black --check .
+      - name: mypy
+        run: python -m mypy
+
+  stages:
+    name: ${{ matrix.stage }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Every stage reports, even after one fails. Stopping at the first failure
+      # means fixing it, pushing, and discovering the next one - each round trip
+      # a full pipeline.
+      fail-fast: false
+      matrix:
+        stage:
+          - unit
+          - determinism
+          - parity
+          - leakage-lint
+          - ap-hack
+          - stress
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev,api]"
+      - name: ${{ matrix.stage }}
+        run: python jobs/ci_stages.py --stage ${{ matrix.stage }}
+
+  # The audit apparatus is versioned in git and is meant to be append-only. A
+  # rewritten history there is not a merge conflict to resolve - it is the one
+  # thing the hash chain exists to make reportable.
+  audit-chain:
+    name: audit chain intact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: experiment log chain
+        run: |
+          python - <<'PY'
+          import sys
+          from libs.ms_models.cv import ExperimentLog
+          broken = ExperimentLog().verify()
+          if broken:
+              sys.exit(f"experiment log chain breaks at index/indices {broken}")
+          print("experiment log chain intact")
+          PY
+      - name: the log was not rewritten in this change
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.sha || 'main' }} --depth=1 || true
+          base=${{ github.event.pull_request.base.sha }}
+          if [ -n "$base" ]; then
+            # Entries may be appended. Any modification to an existing line is a
+            # rewrite of a record that is supposed to be immutable.
+            if git diff "$base" -- research/experiments.jsonl | grep -q '^-[^-]'; then
+              echo "research/experiments.jsonl has removed or modified lines."
+              echo "It is append-only: a disappointing run stays in the log."
+              exit 1
+            fi
+          fi
+
+  infra:
+    name: infra tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: marketsage
+          POSTGRES_PASSWORD: marketsage_dev
+          POSTGRES_DB: marketsage
+        # 5433, matching docker-compose.yml and DEFAULT_DSN in ms_data/store.py.
+        # The runner has no competing PostgreSQL, so 5432 would work here - and
+        # then CI would be exercising a connection string no developer ever uses,
+        # which is exactly the kind of divergence that surfaces on the one day
+        # someone needs CI to reproduce a local failure.
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U marketsage" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev,infra,api]"
+      - run: python tasks.py migrate
+      - run: python -m pytest -m infra -q

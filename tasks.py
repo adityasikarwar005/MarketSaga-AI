@@ -14,6 +14,8 @@ Cross-platform, no `make` required.
     python tasks.py fmt       black + ruff --fix
     python tasks.py typecheck mypy
     python tasks.py verify    the full gate check: lint + typecheck + test
+    python tasks.py ci        the six CI stages, each reporting separately
+    python tasks.py restore-drill   the monthly restore drill's self-test
     python tasks.py holidays  discover the exchange calendar (and why)
     python tasks.py qc        data quality gates for every recorded day
     python tasks.py research  end-to-end research smoke test on a recorded day
@@ -93,6 +95,21 @@ def verify() -> None:
     typecheck()
     print("\n=== test ===")
     test()
+
+
+def ci() -> None:
+    """MA4 - the six stages, each reporting which guarantee it establishes.
+
+    `verify` answers "is this commit green". This answers "which guarantee
+    broke", which is the question you have once the answer is no.
+    """
+    run(_py(), str(ROOT / "jobs" / "ci_stages.py"), *sys.argv[2:], check=False)
+
+
+def restore_drill() -> None:
+    """MA5 - prove the drill detects damage, without needing a clean machine."""
+    args = sys.argv[2:] or ["--self-test"]
+    run(_py(), str(ROOT / "jobs" / "restore_drill.py"), *args, check=False)
 
 
 def status() -> None:
@@ -331,6 +348,8 @@ COMMANDS = {
     "fmt": fmt,
     "typecheck": typecheck,
     "verify": verify,
+    "ci": ci,
+    "restore-drill": restore_drill,
     "status": status,
 }
 

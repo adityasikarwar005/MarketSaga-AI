@@ -11,8 +11,11 @@ python tasks.py verify        # what CI runs: lint + typecheck + test. A module 
 python tasks.py test          # pytest -q
 python tasks.py lint          # ruff check + black --check
 python tasks.py fmt           # black + ruff --fix
+# The formatter is black, not `ruff format` - they disagree, and `lint` checks black.
 python tasks.py typecheck     # mypy (strict on libs/, relaxed annotations on jobs/ and tasks.py)
 python tasks.py status        # config health and what blocks the current gate
+python tasks.py ci            # the six CI stages separately: unit, determinism, parity, leakage-lint, ap-hack, stress
+python tasks.py restore-drill # prove the restore drill still detects a damaged backup
 ```
 
 Running a single test or file:
