@@ -69,6 +69,55 @@ trial count above is what would make any later "improvement" honest. The gate is
 re-opened when intraday data exists, which is the change that would alter the
 answer rather than the estimate.
 
+### Candlestick patterns, measured 2026-08-28 — nothing survives correction
+
+Added because TradingView's automatic pattern detection was raised as a model.
+Their own page describes patterns as things that "are used to predict future
+price movements" — a statement about what traders do, not a claim that it works
+— and makes no accuracy claim either way. The detector and the question of
+whether the detector predicts anything are separate pieces of work, so both were
+built.
+
+Nineteen classical patterns, precise predicates rather than resemblances,
+against **2 466 real NIFTY daily bars, 2016-08-29 .. 2026-08-28**.
+
+Forward return after each pattern, measured against the **unconditional** mean
+rather than against zero — an index that drifts up makes every bullish pattern
+look right for free:
+
+| horizon | patterns tested | Sidak threshold | significant |
+|---|---|---|---|
+| 1 bar | 19 | p < 0.00270 | **0** |
+| 5 bar | 19 | p < 0.00270 | **0** |
+
+Three would have looked like findings on their own:
+
+| pattern | horizon | uncorrected p | after correction |
+|---|---|---|---|
+| `three_white_soldiers` | 5-bar | 0.0188 | not significant |
+| `three_black_crows` | 5-bar | 0.0311 | not significant |
+| `shooting_star` | 1-bar | 0.0483 | not significant |
+
+Nineteen tests at an uncorrected 0.05 give a **62% chance of at least one false
+positive**, which is why the correction is not optional and why the report
+states the count it corrected for. A corrected p-value whose n is not stated is
+an uncorrected p-value.
+
+Several patterns carry the **opposite sign to their own claimed direction**:
+`hammer` (bullish) at −0.219% on 1 bar, `bullish_engulfing` at −0.707% on 5,
+`evening_star` (bearish) at +0.791%. None of those are significant either — they
+are noise, and reporting them as contrarian signals would be the same error in
+the other direction.
+
+**Null check.** The same shapes with the outcomes shuffled against them: **0.05
+false positives per trial over 20 shuffles, worst 1.** The pipeline finds
+approximately nothing when there is nothing to find, which is what makes the
+zero above worth anything.
+
+The detector ships (`libs/ms_models/patterns.py`) because drawing patterns on a
+chart is useful annotation. It does not feed the decision chain, and this table
+is why.
+
 ### Update, 2026-08-28: ten years of real bars, and three more attempts
 
 The cached series were two years deep. Refetched at ten:
