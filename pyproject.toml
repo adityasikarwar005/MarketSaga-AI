@@ -39,8 +39,14 @@ api = [
 # imports both lazily: the repository, the tests and CI all run without a broker
 # account, and the mutation tests for the adapter run without one too.
 broker = [
+    # Angel One
     "smartapi-python>=1.4",
     "pyotp>=2.9",          # the daily TOTP; the secret lives in .env, never here
+    # Upstox. The V3 feed is protobuf, and the generated module ships in the SDK
+    # rather than being built here - vendoring a .proto means a protoc in the
+    # build, and the schema is the vendor's to change.
+    "upstox-python-sdk>=2.15",
+    "protobuf>=5.26",
     "websocket-client>=1.7",
 ]
 # Publishing the dashboard as a Hugging Face Space. Separate from everything
@@ -114,6 +120,9 @@ module = [
     "psycopg.*",
     "SmartApi.*",
     "pyotp.*",
+    "upstox_client.*",
+    "google.protobuf.*",
+    "websocket.*",
     "huggingface_hub.*",
 ]
 ignore_missing_imports = true

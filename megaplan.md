@@ -444,7 +444,7 @@ python -m services.ingest_market --dry-run --duration 300   # 5 min live, assert
 ```
 **Done:** forcibly kill the network for 20 s mid-session → reconnects, gap logged, no silent data loss.
 
-**Two adapters, one protocol.** `libs/ms_broker/kite.py` and
+**Three adapters, one protocol.** `libs/ms_broker/kite.py` and
 `libs/ms_data/angelone.py` both implement `MarketFeed` and no consumer imports
 either. Angel One is the one credentials exist for. Its four vendor-specific
 traps are documented in the module docstring and each has a mutation-tested
@@ -455,6 +455,30 @@ to **one expiry** (M10's lookahead bug in vendor clothing), and there are **no
 sequence numbers**, so `GapDetector` is genuinely blind here rather than
 reporting zero gaps - `AngelOneFeed.gap_detection` returns `False` so that
 distinction is asked for rather than inferred.
+
+`libs/ms_data/upstox.py` is the third, and the one to reach for: the Analytics
+Token is valid for a year and is **read-only**, so an unattended recorder needs
+no daily login and physically cannot place an order. That last part is a
+stronger guarantee than `ms_core.env` provides, because it is enforced at the
+venue rather than by this repository. Its traps are the inverse of Angel One's
+and are documented and mutation-tested the same way: prices are `double` and
+already in **rupees** (the danger is carrying the Angel paise fix across), int64
+fields arrive as **strings** from protobuf's JSON mapping, `ltt` is the last
+*traded* time and not the feed clock (`currentTs` would claim a trade happened
+now), the first message after subscribing is a **snapshot and not a tick**, and
+`feeds` is keyed by a vendor **string** where `Tick.instrument_id` is an int -
+resolved through the instrument master, never hashed.
+
+One thing Upstox gives that neither of the others does: `MarketInfo.segmentStatus`
+reports whether the segment is open, which is the question `FeedHealth` is
+otherwise forced to guess at when the socket goes quiet.
+
+Known risk, carried deliberately: the documentation lists the websocket as
+supported for Analytics Tokens, and there are open community reports of the feed
+authorize endpoint returning 403 for exactly that combination. Unresolved as of
+2026-08-28. `authorize()` says so in its error rather than leaving somebody to
+regenerate a token that was never the problem; the fallback is a daily OAuth
+token in the same field.
 
 The tick counts as ingested when a real one has been recorded from a real
 session. Nothing in this repository has done that yet.
