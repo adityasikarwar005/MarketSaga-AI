@@ -200,7 +200,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M61** | Fan-chart producer | L6 | P6 | M60 | | ☐ |
 | **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | | ☐ |
 | **M70** | IV surface fitter | L7 | P7 | M14 | ✅ | ☑ |
-| **M71** | Greeks engine | L7 | P7 | M70 | | ◐ |
+| **M71** | Greeks engine | L7 | P7 | M70 | ✅ | ☑ |
 | **M72** | Structure enumerator & liquidity filter | L7 | P7 | M71 | | ☐ |
 | **M73** | Monte Carlo P&L engine | L7 | P7 | M72, M60, M56 | | ☐ |
 | **M74** | Cost model (PIT rates, STT bases, slippage) | L7 | P7 | M01 | | ☑ |
@@ -1166,11 +1166,44 @@ python jobs/surface_report.py --demo    # synthetic chain; --date needs recorded
 
 ---
 
-#### M71 · Greeks engine
+#### M71 · Greeks engine ✅
 **Tasks**
-- [ ] Delta, gamma, vega, theta, rho — from the fitted surface, not vendor values
-- [ ] Portfolio aggregation across legs and positions
-- [ ] Validate against an independent reference implementation
+- [x] Delta, gamma, vega, theta, rho — from the fitted surface, not vendor values
+- [x] Portfolio aggregation across legs and positions
+- [x] Validate against an independent reference implementation
+
+**Built** `libs/ms_options/greeks.py`, `tests/unit/test_greeks.py` (37 tests).
+Black-76 itself was already in `pricing.py` — that was the ◐. What was missing
+is the part that makes those numbers hedge correctly.
+
+**Black-Scholes delta holds volatility constant; a real surface does not.**
+The strike stays put, `k = ln(K/F)` shifts when the forward moves, and the smile
+returns a different vol at the same strike. The delta that hedges is
+`dV/dF = dV/dF|sigma + vega * dsigma/dF`, and the second term is not small: on
+this Nifty-shaped smile a 500-point-OTM call has a Black-76 delta of **0.2839**
+and a true delta of **0.2940** — 3.6% more. Ten lots hedged on the first number
+sit about seven units of forward short, every day, in the same direction. It
+presents as slippage, which is a thing that exists and that everyone expects to
+see some of.
+
+Gamma carries the same chain rule with four terms
+(`Gamma + 2*vanna*sigma_F + volga*sigma_F^2 + vega*sigma_FF`), where one wrong
+sign yields a number that is smooth, positive and wrong. So every derivative is
+pinned against a **full reprice**: bump the forward, recompute k, ask the SVI
+slice for the vol there, price again. That route shares no algebra with the
+analytic one, which is what "independent reference implementation" has to mean
+to be worth anything.
+
+**Vega is never one number.** A 7-day vega and a 60-day vega are different risks
+sharing a unit — front vol moves two to three times as much on any day worth
+hedging. Summed, a book reports vega-neutral while short the front and long the
+back: a real position, real P&L, and no number describing it. `PortfolioGreeks`
+buckets vega by expiry and exposes the total only as `vega_gross`, named so it
+cannot be mistaken for a net.
+
+Mutation-tested: dropping the smile term, flipping the sign of `dsigma/dF`,
+dropping volga from gamma, collapsing vega into one bucket, and bypassing the
+staleness check during aggregation. All five caught.
 
 **Verify** `pytest tests/unit/test_greeks.py -k "matches_reference_within_tol or portfolio_aggregation"`
 
