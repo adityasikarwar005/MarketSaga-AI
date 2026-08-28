@@ -197,7 +197,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M59** | Ensemble, calibration, conformal | L5 | P5 | M53, M55 | ⚙ | ☑ |
 | **M5A** | Model registry & ONNX serving (stages + gate done; MLflow/ONNX deferred) | L5 | P5 | M59 | | ◐ |
 | **M60** | Path sampler | L6 | P6 | M55, M54 | ✅ | ☑ |
-| **M61** | Fan-chart producer | L6 | P6 | M60 | | ☐ |
+| **M61** | Fan-chart producer | L6 | P6 | M60 | ✅ | ☑ |
 | **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | | ☐ |
 | **M70** | IV surface fitter | L7 | P7 | M14 | ✅ | ☑ |
 | **M71** | Greeks engine | L7 | P7 | M70 | ✅ | ☑ |
@@ -1145,12 +1145,45 @@ Three survived the first pass and needed tests written for them.
 
 ---
 
-#### M61 · Fan-chart producer
+#### M61 · Fan-chart producer ✅
 **Tasks**
-- [ ] Per-minute empirical OHLC quantiles from sampled paths
-- [ ] Body = [q25,q75] of close, wick = [q05,q95], tint by `P(up)`
-- [ ] Implied-move band overlay from M70
-- [ ] `edge_ratio = forecast |move| / implied move` computed and surfaced
+- [x] Per-minute empirical OHLC quantiles from sampled paths
+- [x] Body = [q25,q75] of close, wick = [q05,q95], tint by `P(up)`
+- [x] Implied-move band overlay from M70
+- [x] `edge_ratio = forecast |move| / implied move` computed and surfaced
+
+**Built** `libs/ms_models/fanchart.py`, `tests/unit/test_fanchart.py` (29 tests).
+
+**The two moves have to be measured against the same year, and they were not.**
+`pricing.MINUTES_PER_YEAR` is **94 500** (252 x 375, trading time).
+`surface.fit_surface` computes its year fraction from `365 * 24 * 3600` —
+**525 600** minutes, calendar time. They differ by 5.56x, so any move computed
+from a volatility differs by **2.358x**. A 13-vol name over sixty minutes
+implies 0.3276% on trading time and 0.1389% on calendar time, and both are
+numbers somebody would print without blinking.
+
+That is not a rescaling, it can flip the decision. With a forecast band sitting
+between the two implied moves, calendar time gives `edge_ratio` **1.500** — buy
+volatility — and trading time gives **0.636** — sell it. Same fan, same IV, same
+horizon; a test pins exactly that pair.
+
+So `TimeBasis` has **no default anywhere in the module**, and
+`edge_ratio_from_surface` uses `SURFACE_BASIS` so a change to what M70 fits
+breaks here rather than silently rescaling every edge estimate. Whether calendar
+time is right for an intraday horizon is a real open question — options do not
+decay over a weekend the way it implies — but it has to be settled by changing
+what the surface fits, not by disagreeing with it downstream.
+
+Two smaller ones: both sides of the ratio are 1.645 sd, because comparing a 90%
+band against a one-sd move returns 1.645 for a model that agrees exactly with
+the market and somebody reads that as a large edge. And `P(up)` counts paths
+above **the entry**, not above the ensemble median — against the median it is
+50% at every minute by construction and the tint varies only with sampling noise
+while looking exactly like information.
+
+Mutation-tested: a default basis, the surface basis flipped, `P(up)` against the
+median, the 1.645 factor dropped, monotonicity unchecked, and a narrowing fan
+not reported. All six caught.
 
 **Verify** `pytest tests/unit/test_fanchart.py -k "monotone_quantiles or implied_overlay_present"`
 
