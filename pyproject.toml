@@ -114,5 +114,6 @@ module = [
     "psycopg.*",
     "SmartApi.*",
     "pyotp.*",
+    "huggingface_hub.*",
 ]
 ignore_missing_imports = true
