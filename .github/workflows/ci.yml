@@ -63,7 +63,12 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: pip install -e ".[dev,api]"
+      # infra too, despite these stages needing no Postgres or Redis: the extra
+      # also carries pyarrow, duckdb and pandas, which the archive tests import
+      # directly. Installing less than a developer has is how CI and local
+      # disagree about which tests exist, and the disagreement only ever shows
+      # up as a CI-only failure nobody can reproduce.
+      - run: pip install -e ".[dev,api,infra]"
       - name: ${{ matrix.stage }}
         run: python jobs/ci_stages.py --stage ${{ matrix.stage }}
 
