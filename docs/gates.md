@@ -9,7 +9,7 @@
 | G1 | Market Data Spine | Byte-identical replay ×2; 20 sessions ≥99.5% candles; chain ≥95%; restore verified | — | — | — | ☐ |
 | G2 | News & PIT Store | 30 days collected; dup rate <3%; publish-ts within 5s for ≥90% of 200 sampled | — | — | — | ☐ |
 | G3 | Event Classification | macro-F1 ≥0.80; recall(sev≥7) ≥0.95; noise FP ≤2%; p95 ≤120ms; severity↔\|AR₃₀\| Spearman ≥0.35; AP-hack test passes | — | — | — | ☐ |
-| G4 | Impact Library + Gap | >=15 classes with n_eff >=8; >=5 with CI excluding 0; gap CRPS beats naive by >=10%; 20 auto briefings | gap: -13.7% vs naive, calibrated (12 trials) | 2026-08-27 | — | NOT PASSED |
+| G4 | Impact Library + Gap | >=15 classes with n_eff >=8; >=5 with CI excluding 0; gap CRPS beats naive by >=10%; 20 auto briefings | gap: -2.4% vs naive on 2 465 sessions; best subset (k=1) +1.0%, gate needs +10% (21 trials) | 2026-08-28 | — | NOT PASSED |
 | **G5** | **Features + Baseline** | **M1 > M0 on log loss (bootstrap CI excl. 0); reliability slope ∈[0.85,1.15]; Brier skill >0.02; AUC ≥0.55 on high-sev; M5 beats HAR-RV on QLIKE; edge-realisation slope >0.5** | — | — | — | ☐ |
 | G6 | Candle Projection | 90% coverage = 90%±3%; PIT uniform; CRPS beats RW-GARCH and implied by ≥8%; render <120ms | — | — | — | ☐ |
 | G7 | Options + Simulator | ≥12 months L2: PF ≥1.2; positive in ≥3 of 4 quarters; maxDD ≤12%; deflated Sharpe >0; all 10 stress scenarios pass | — | — | — | ☐ |

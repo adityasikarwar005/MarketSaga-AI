@@ -2101,7 +2101,7 @@ Sprints are two weeks. Gate references are `docs/gates.md`.
 | S8 | 15–16 | M30 M31 M32 M33 | |
 | S9 | 17–18 | M35 M34 M95 | **G4** ← *first shipped product* |
 | S10 | 19–20 | M40 M41 M42 **M43** | |
-| S11 | 21–22 | M44 M45 M50 M51 M52 · **order the historical option chain now** | |
+| S11 | 21–22 | M44 M45 M50 M51 M52 · ~~order the historical option chain now~~ *free from NSE - see M14* | |
 | S12 | 23–24 | M53 M55 M57 M59 M5A | **G5** ← *the decision gate* |
 | S13 | 25–26 | M54 M60 M61 M62 | **G6** |
 | S14 | 27–28 | M70 M71 M56 | |
@@ -2127,51 +2127,90 @@ Update this table at the end of every sprint. It is the honest picture.
 | Layer | Modules | ☑ Verified | ◐ In progress | ☐ Not started |
 |---|---:|---:|---:|---:|
 | L0 Foundation | 7 | 7 | 0 | 0 |
-| L1 Market Data | 11 | 10 | 1 | 0 |
-| L2 News & Events | 10 | 0 | 0 | 10 |
+| L1 Market Data | 11 | 11 | 0 | 0 |
+| L2 News & Events | 10 | 2 | 0 | 8 |
 | L3 Impact | 6 | 5 | 0 | 1 |
 | L4 Features | 6 | 4 | 1 | 1 |
-| L5 Models | 12 | 8 | 1 | 3 |
-| L6 Projection | 3 | 0 | 0 | 3 |
-| L7 Decision | 8 | 4 | 1 | 3 |
-| L8 Execution | 6 | 4 | 0 | 2 |
-| L9 Surface | 6 | 4 | 0 | 2 |
-| LX Ops | 6 | 3 | 0 | 3 |
-| **Total** | **81** | **49** | **4** | **28** |
+| L5 Models | 12 | 9 | 1 | 2 |
+| L6 Projection | 3 | 3 | 0 | 0 |
+| L7 Decision | 8 | 7 | 0 | 1 |
+| L8 Execution | 6 | 5 | 0 | 1 |
+| L9 Surface | 6 | 5 | 1 | 0 |
+| LX Ops | 6 | 6 | 0 | 0 |
+| **Total** | **81** | **64** | **3** | **14** |
+
+*Counts regenerated from the module rows above, not maintained by hand. They had
+drifted badly: the table read 49/81 while claiming L6 Projection was 0/3 and L8
+Execution 0/6, when all three projection modules and five of six execution
+modules were finished and verified. A progress table that is edited separately
+from the thing it describes stops being a measurement.*
 
 ### What the module count does not say
 
-**49 of 81 is 60%, and read alone it is misleading in both directions.**
+**64 of 81 is 79%, and read alone it is misleading in both directions.**
 
-*It understates the foundation.* L0 and L1 are effectively finished, and they are
-the layers everything else stands on: point-in-time correctness, deterministic
-replay, a leak-free CV harness, quality gates. L5 at 8/12 includes the whole
-measurement apparatus - calibration, conformal intervals, the trial log, null
-tests for every fitted component.
+*It understates the foundation.* L0 and L1 are finished, and they are the layers
+everything else stands on: point-in-time correctness, deterministic replay, a
+leak-free CV harness, quality gates. L5 at 9/12 includes the whole measurement
+apparatus - calibration, conformal intervals, the trial log, null tests for every
+fitted component.
 
-*It overstates the distance travelled.* Four layers have not started at all -
-News & Events (0/10), Projection (0/3), Execution (0/6), Surface (0/6) - and two
-of those are real work rather than plumbing. The remaining 44 modules are not
+*It overstates the distance travelled.* News & Events is 2/10 and the eight that
+remain are real work rather than plumbing. The remaining 17 modules are not
 evenly sized and are not evenly hard.
 
-*And it says nothing about the only question that matters.* **One component has
-run on real market data**: the overnight gap forecaster, on 496 sessions of free
-daily bars. It did not pass its gate. Everything else - direction, volatility,
-ensemble, meta-labeller, sizing, the risk gate - has run only on synthetic data
-where the answer was known in advance.
+*And it says almost nothing about the only question that matters.* Of the 81
+modules, **five have ever consumed real market data**:
+
+| | |
+|---|---|
+| M02 | holiday calendar, discovered from NSE and corroborated by published bhavcopies |
+| M14 | bhavcopy loader, run against real UDiFF and legacy files |
+| M15 | cross-asset series, real daily bars |
+| M15b | daily bar loader, ten years of real NIFTY bars |
+| M35 | overnight gap forecaster - **the only model** ever measured on real data |
+
+That is **6%**. Everything else - direction, volatility, ensemble, meta-labeller,
+the IV surface, the Greeks engine, sizing, the risk gate - has run only on
+synthetic data where the answer was known in advance.
+
+And the one model that has been measured **lost**. On 2,465 real sessions it is
+2.4% worse than a naive baseline that regresses on a single variable. (An earlier
+run reported −13.7% on 496 sessions; four fifths of that deficit turned out to be
+sample size rather than specification, which is itself a lesson about how early a
+number can be trusted.)
+
+*What changed, and what did not.* The bhavcopy loader (M14) put eight years of
+real option chains within reach without a broker account, which moves roughly
+**28 more modules from "cannot be tested on real data" to "could be, and has not
+been"** - the whole L6 projection layer, the L7 decision layer, M54, M55, M59.
+Reachable is not validated, and this document should never let the two be read
+as the same thing. The count of modules that have actually been pointed at real
+data is still five.
 
 That is not a criticism of those modules. It is the honest statement of what has
 been *demonstrated* versus what has been *built*, and the two are far apart.
 
-**What exists is the scale, not the goods.** The scale now works: two full audits
-have found nine defects, every one of which produced a working pipeline,
-plausible numbers and no error - a 30% false-positive rate that looked like a
-finding, a gamma of 0.5 invented from noise, an inert regularisation constant
-that read as a defence, a theta sign error hiding under eighty-two passing tests,
-a sizing defence that no code path could reach.
+**What exists is the scale, not the goods.** The scale now works, and it keeps
+catching its own author. Two full audits found nine defects, every one of which
+produced a working pipeline, plausible numbers and no error - a 30%
+false-positive rate that looked like a finding, a gamma of 0.5 invented from
+noise, an inert regularisation constant that read as a defence, a theta sign
+error hiding under eighty-two passing tests, a sizing defence that no code path
+could reach. Since then it has also caught: a `pit_uniformity` that scored a
+perfectly calibrated model the same as a 63%-coverage one; a holiday sync that
+left the calendar *less* correct than not running it, by writing empty year files
+the calendar read as "no holidays"; and a weekend-holiday dispute warning that
+would have fired, wrongly, every year forever.
 
-Real progress resumes when a broker feed arrives. Until then every new module is
-another thing waiting on the same input.
+*The previous version of this section ended "real progress resumes when a broker
+feed arrives". That was wrong, and it was load-bearing - it justified building
+more modules while waiting.* Eight years of real option data turned out to be
+freely downloadable from the exchange with no account at all. The next real
+progress is not another module and it is not the feed: it is pointing M70's SVI
+fitter at a real option chain. If the surface does not fit arbitrage-free on real
+prices, the entire L7 layer above it - Greeks, structures, sizing - has been
+verified only against data whose answer was known in advance.
 
 ### Infrastructure status
 
@@ -2204,13 +2243,54 @@ credential and is a wrong server. See `docs/editor-setup.md`.
 
 ## 7. What to do right now
 
-1. `M00` — repo skeleton, docker compose up.
-2. `M10` `M11` — instrument master + feed adapter.
-3. **`M12` — the recorder. Start it tonight.**
-4. `M14` — chain snapshotter. Start it tonight too.
-5. Everything else, in sprint order.
+*This section used to be the day-one list: stand up the repo, write the feed
+adapter, start the recorder tonight. All of that is done. It is replaced rather
+than appended to, because a stale instruction list is worse than none - somebody
+follows it.*
 
-> **The recorder is the whole project's foundation.** Models can be rebuilt in a weekend.
-> History cannot be recovered at any price. Every day it isn't running is a day of
-> event-conditioned samples you will never have — and event-conditioned sample count
-> is the binding constraint on whether G5 ever passes.
+**1. Point M70's SVI fitter at a real option chain.** Everything else on this
+list is secondary. The bhavcopy loader (M14) makes it possible today with no
+account and no credential. If the surface does not fit arbitrage-free on real
+prices, then M71 Greeks, M72 structures and M75 sizing have all been verified
+only against synthetic data whose answer was known in advance - and that is the
+top four-fifths of the decision chain.
+
+Use `traded_only=True` (the default). More than half of a real chain never
+trades, and those contracts carry an exchange-computed price that would fit
+beautifully and mean nothing.
+
+**2. Then M55 and M54 on the same data.** Volatility and quantiles are the two
+models the whole projection layer consumes. Neither has seen a real price.
+
+**3. Get a feed - Upstox, Analytics Token.** Free, one year, read-only, no daily
+login. Read-only is a feature here: the recorder cannot place an order even by
+accident, which is a stronger guarantee than `MARKETSAGE_ENV` because it is
+enforced at the venue rather than by this repository. The adapter is written and
+mutation-tested; it needs a token.
+
+**4. Only then, the recorder.** It is still the thing that accumulates what
+cannot be bought later - but see the correction below before treating that as
+urgent.
+
+---
+
+> **A correction to what this section used to say.**
+>
+> It read: *"History cannot be recovered at any price. Every day it isn't running
+> is a day of event-conditioned samples you will never have."* That was written
+> as a fact and used as a reason to hurry.
+>
+> It is false for a large slice of what matters. NSE publishes an F&O bhavcopy
+> for every session going back to 2018 - every contract, every strike, every
+> expiry, with settlement, open interest and volume - free, with no account.
+> Eight years of daily option history was recoverable the entire time, and the
+> belief that it was not is what made "build another module while we wait" feel
+> reasonable.
+>
+> What genuinely cannot be recovered is narrower and should be stated as such:
+> **intraday ticks, the book, and the option chain at any moment other than the
+> close.** Those are gone if not recorded. The daily series is not.
+>
+> Free intraday index bars have their own shape worth knowing: 1-minute data is
+> available for a rolling ~30 days, 5-minute for 60 days, hourly for 3 years. So
+> even there, "start today or lose it forever" is only true beyond a month.
