@@ -189,14 +189,14 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M51** | CV harness (purged / embargo / CPCV) | L5 | P5 | M50 | | ☑ |
 | **M52** | M0 rules baseline | L5 | P5 | M34, M44 | | ☑ |
 | **M53** | Direction model (boosted trees + isotonic) | L5 | P5 | M51 | ⚙ | ☑ |
-| **M54** | Quantile model | L5 | P6 | M51 | ⚙ | ☐ |
+| **M54** | Quantile model | L5 | P6 | M51 | ✅ | ☑ |
 | **M55** | Volatility model (HAR + boosted residual) | L5 | P5 | M51 | ⚙ | ☑ |
 | **M56** | IV-change model | L5 | P7 | M51, M70 | ⚙ | ☐ |
 | **M57** | Meta-labeller (post-cost, threshold from loss ratio) | L5 | P5 | M53, M74 | ⚙ | ☑ |
 | **M58** | Sequence models (TCN / transformer) | L5 | P6 | M51, M13 | ⚙ | ⊘ |
 | **M59** | Ensemble, calibration, conformal | L5 | P5 | M53, M55 | ⚙ | ☑ |
 | **M5A** | Model registry & ONNX serving (stages + gate done; MLflow/ONNX deferred) | L5 | P5 | M59 | | ◐ |
-| **M60** | Path sampler | L6 | P6 | M55, M54 | ⚙ | ☐ |
+| **M60** | Path sampler | L6 | P6 | M55, M54 | ✅ | ☑ |
 | **M61** | Fan-chart producer | L6 | P6 | M60 | | ☐ |
 | **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | | ☐ |
 | **M70** | IV surface fitter | L7 | P7 | M14 | ✅ | ☑ |
@@ -976,7 +976,31 @@ python jobs/experiment_log.py --verify    # chain intact = no run was quietly de
 ---
 
 #### M53 · Direction model ⚙ → card **[AI-8]**
-#### M54 · Quantile model ⚙ → card **[AI-9]**
+#### M54 · Quantile model ✅ → card **[AI-9]**
+
+**Built** `libs/ms_models/quantile_heads.py`, `tests/ml/test_quantile_heads.py`
+(36 tests). One boosted head per (alpha, horizon), monotonicity enforced
+post-hoc, Gaussian fallback from M55's sigma per head.
+
+**Pinball loss has no second derivative, and Newton boosting divides by it.**
+With `h = 0` the leaf value collapses to `-sum(g)/l2`, and the pinball gradient
+only counts which side of the prediction each point is on — never how far. The
+step becomes a function of the sign imbalance and the regularisation constant.
+
+It does not fail the way you would expect. **Marginal coverage still looks
+right.** What breaks is the conditional part: on heteroscedastic data whose true
+5–95 half-width triples between regimes, the fitted band widens **1.28x without
+leaf renewal against 1.89x with it** — 97.1% coverage in the quiet regime and
+84.6% in the busy one, which average to something that reads as calibrated. Too
+small a position on quiet days and too large a one on exactly the days that
+matter. It also never early-stops, running to the tree cap.
+
+The fix is leaf-value renewal: constant hessian to choose the splits, then each
+leaf's value set to the empirical alpha-quantile of its residuals. `renew_leaves`
+is exposed so a test can measure what it buys — a defence nobody can switch off
+is a defence nobody has measured.
+
+**Verify** `pytest tests/ml/test_quantile_heads.py`
 #### M55 · Volatility model ⚙ → card **[AI-10]**
 #### M56 · IV-change model ⚙ → card **[AI-11]**
 #### M57 · Meta-labeller ⚙ → card **[AI-12]**
@@ -1079,11 +1103,43 @@ python jobs/shadow_report.py --challenger <ID> --sessions 15
 
 ### L6 · PROJECTION
 
-#### M60 · Path sampler ⚙ → card **[AI-15]**
+#### M60 · Path sampler ✅ → card **[AI-15]**
 **Tasks**
-- [ ] Volatility-clustering simulator (student-t innovations, GARCH-style) conditioned on M55
-- [ ] Calibrate so terminal quantiles match M54's heads
-- [ ] 5 000 paths in < 60 ms (vectorised)
+- [x] Volatility-clustering simulator (student-t innovations, GARCH-style) conditioned on M55
+- [x] Calibrate so terminal quantiles match M54's heads
+- [x] 5 000 paths in < 60 ms (vectorised)
+
+**Built** `libs/ms_models/paths.py`, `tests/ml/test_path_sampler.py` (30 tests).
+
+**This is the one module that uses numpy**, and the reason is measured: 5 000
+paths of 60 steps is **443 ms** in pure Python against a 60 ms budget. Vectorised
+it runs at a **49 ms median** (min 36, max 58), of which ~22 ms is drawing the
+student-t innovations. An earlier shape cost 79 ms purely from writing
+`levels[:, s] = x` down the column of a row-major array; the arrays are built
+step-major and transposed once. The latency test guards at 2x the budget rather
+than at the budget — a timing assertion that flakes is one somebody deletes.
+
+**Two distributions that are not the same distribution.** GARCH gives the path
+*shape* (clustering, fat tails); the heads give a *terminal distribution* that
+was fitted and scored. Using the simulated terminal throws the fitted model
+away at the last step. So paths are simulated for shape and bent to land where
+the heads say — each keeps its increments and takes a drift adjustment ramped
+from 0 at entry to 1 at the horizon. Flat instead of ramped moves the path's
+first point too, so every P&L along it is offset by a constant nobody can see.
+
+**The tails are where it goes wrong quietly.** Clamping everything past the
+outermost head onto that head flattens the tail onto one value, so CVaR — the
+*mean of the tail* — becomes the 5th percentile, which is the tail's boundary.
+Measured: **CVaR₅ is 30% optimistic** clamped, and the worst path collapses from
+−0.133 to −0.020. The number still computes and is still negative.
+
+Clustering is verified against an iid control (alpha=beta=0): ACF of squared
+returns **0.157 vs 0.0007**. Squared returns, because a GARCH process has
+uncorrelated returns by construction and an ACF on returns reads zero either way.
+
+Mutation-tested: unscaled innovations, clamped-by-default tails, flat instead of
+ramped drift, ACF on returns rather than squares, and ignoring `variance0`.
+Three survived the first pass and needed tests written for them.
 
 **Verify** `pytest tests/ml/test_path_sampler.py -k "terminal_matches_quantiles or vol_clustering_present or latency"`
 

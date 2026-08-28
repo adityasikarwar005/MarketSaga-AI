@@ -10,6 +10,9 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
+    # M60 only. 5 000 paths of 60 steps is 443 ms in pure Python against a 60 ms
+    # budget; vectorised it is 49 ms. Every other model here stays dependency-free.
+    "numpy>=1.26",
     "tzdata>=2024.1",       # Windows has no system tz database
 ]
 
