@@ -11,9 +11,16 @@ with the URL: the approach, the numbers, and the two gates that are failing.
 That is a deliberate thing to publish rather than an accident of the free tier,
 so `--check` prints what would become public and the upload asks before it runs.
 
-Authentication is not handled here and is not read from a prompt. Run
-`huggingface-cli login` yourself; the token belongs in the machine's credential
-store, not in a script, a config file or a chat window.
+Authentication comes from `HF_TOKEN` in `.env`, or from a prior `hf auth login`,
+in that order. Never from a prompt or a command-line argument - a token passed
+as an argument lands in the shell history of whoever ran it, and in the process
+list of everyone on the machine while it runs.
+
+A secret in a file is fine exactly as long as the file stays out of the
+repository, so that is checked rather than trusted: the script refuses to read a
+token from a `.env` that `git check-ignore` does not cover. That check is the
+whole difference between a convenient config and a leak waiting for one careless
+`git add -A`.
 """
 
 from __future__ import annotations
@@ -28,6 +35,44 @@ SPACE_DIR = ROOT / "services" / "dashboard"
 # dropped into the directory is excluded until somebody adds it here, which is
 # the safer direction for a folder that gets uploaded to a public URL.
 PUBLISHED = ("README.md", "index.html", "app.css", "app.js", "data.js")
+
+
+def _token_from_env() -> str | None:
+    """HF_TOKEN out of `.env`, but only if git genuinely cannot see the file.
+
+    Keeping a secret in a file is fine exactly as long as the file stays out of
+    the repository, so that is checked rather than trusted. A `.env` that git
+    tracks is one commit away from being public, and the check costs one
+    subprocess.
+    """
+    import os
+    import subprocess
+
+    env_file = ROOT / ".env"
+    if not env_file.exists():
+        return os.environ.get("HF_TOKEN") or None
+
+    ignored = (
+        subprocess.run(
+            ["git", "check-ignore", "-q", ".env"], cwd=ROOT, capture_output=True, check=False
+        ).returncode
+        == 0
+    )
+    if not ignored:
+        raise SystemExit(
+            "  .env is NOT gitignored, so a token in it is one commit away from\n"
+            "  being public. Add `.env` to .gitignore before putting a secret\n"
+            "  there. Refusing to read it."
+        )
+
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        if key.strip() == "HF_TOKEN":
+            return value.strip().strip("\"'") or None
+    return os.environ.get("HF_TOKEN") or None
 
 
 def files() -> list[Path]:
@@ -68,16 +113,21 @@ def deploy(space: str, *, private: bool, yes: bool) -> int:
     except ImportError:
         raise SystemExit('  huggingface_hub is missing. pip install -e ".[deploy]"') from None
 
+    token = _token_from_env()
     try:
-        me = whoami()
+        me = whoami(token=token) if token else whoami()
     except Exception:
         raise SystemExit(
-            "  not logged in to Hugging Face.\n"
-            "  Run `huggingface-cli login` yourself and paste the token there - it\n"
-            "  belongs in the credential store, not in this script or a chat window."
+            "  not authenticated to Hugging Face. Either:\n"
+            "    - put HF_TOKEN=... in .env, a Write token from\n"
+            "      huggingface.co/settings/tokens, or\n"
+            "    - run `hf auth login` yourself.\n"
+            "  A Read token authenticates fine and then fails at create_repo,\n"
+            "  which reads as a permissions bug rather than a wrong token type."
         ) from None
 
-    print(f"\n  logged in as {me.get('name', '?')}")
+    source = ".env" if token else "credential store"
+    print(f"\n  logged in as {me.get('name', '?')}  (token from {source})")
     print(f"  target: {space}  ({'private' if private else 'PUBLIC'})")
     check()
 
@@ -89,7 +139,7 @@ def deploy(space: str, *, private: bool, yes: bool) -> int:
         )
         return 0
 
-    api = HfApi()
+    api = HfApi(token=token)
     api.create_repo(
         repo_id=space, repo_type="space", space_sdk="static", private=private, exist_ok=True
     )
