@@ -198,7 +198,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M5A** | Model registry & ONNX serving (stages + gate done; MLflow/ONNX deferred) | L5 | P5 | M59 | | ◐ |
 | **M60** | Path sampler | L6 | P6 | M55, M54 | ✅ | ☑ |
 | **M61** | Fan-chart producer | L6 | P6 | M60 | ✅ | ☑ |
-| **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | | ☐ |
+| **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | ✅ | ☑ |
 | **M70** | IV surface fitter | L7 | P7 | M14 | ✅ | ☑ |
 | **M71** | Greeks engine | L7 | P7 | M70 | ✅ | ☑ |
 | **M72** | Structure enumerator & liquidity filter | L7 | P7 | M71 | ✅ | ☑ |
@@ -1189,11 +1189,51 @@ not reported. All six caught.
 
 ---
 
-#### M62 · Projection scorer
+#### M62 · Projection scorer ✅
 **Tasks**
-- [ ] Pinball loss, CRPS, PIT histogram, empirical coverage, interval width
-- [ ] Baselines: random-walk + GARCH, and the option-implied distribution
-- [ ] Daily rolling report
+- [x] Pinball loss, CRPS, PIT histogram, empirical coverage, interval width
+- [x] Baselines: random-walk + GARCH, and the option-implied distribution
+- [x] Daily rolling report
+
+**Built** `libs/ms_models/projection.py`, `tests/ml/test_projection.py` (34 tests),
+`jobs/eval_projection.py`.
+
+**The PIT test was measuring against the wrong buckets.** A five-quantile grid
+partitions outcomes into six buckets with nominal probabilities 5, 20, 25, 25,
+20 and 5 percent — not equal. `pit_uniformity` compared observed counts against
+*equal* expected counts, so a **perfectly calibrated model scored 0.150 rather
+than 0**, and discrimination near that floor was almost nil: a model whose 90%
+band covered **63%** scored 0.152, which is 1.4% worse while being catastrophically
+miscalibrated. Against the correct buckets the same three score **3.9, 339 and
+16 513**. Fixed in `quantile.py`; only one test used it, and it asserted `> 0`,
+which the broken floor made trivially true.
+
+**A baseline nobody fitted is one the model beats by construction.**
+`GarchBaseline` fits alpha and beta by maximising the training log-likelihood
+over a grid, and a test checks the fit beats plausible fixed constants.
+
+**The option-implied baseline is risk-neutral, not physical.** Beating it on
+CRPS may only be the variance risk premium — a volatility-selling edge with a
+volatility seller's tail, not distributional skill. That caveat prints in the
+comparison output, because that result is the one most likely to look strongest.
+
+**How much headroom the 8% actually is** — measured before anyone tunes toward it.
+An oracle handed the *true* conditional variance:
+
+| predictable structure | vs random-walk | vs GARCH |
+|---|---|---|
+| none (plain GARCH) | +2.28% | **+0.19%** |
+| 1 step in 15, x9 var | +11.04% | +3.39% |
+| 1 step in 7, x9 var | +23.34% | **+11.05%** |
+
+A perfect forecast gets 0.2% against a fitted GARCH on GARCH-generated data —
+because there the fitted GARCH *is* the oracle. The 8% margin only appears once
+roughly one step in seven carries nine times the variance and is known in
+advance. So the bar is demanding rather than routine, and **a comfortable pass
+on a structureless series is evidence about the baseline, not the model.**
+
+Every baseline must be beaten separately, not on average: beating a mean lets a
+model lose badly to one, and the one it loses to is the informative one.
 
 **Verify**
 ```bash

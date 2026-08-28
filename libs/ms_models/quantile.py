@@ -111,6 +111,16 @@ class QuantileForecast:
         )
 
 
+def pit_bucket_probabilities(alphas: Sequence[float]) -> list[float]:
+    """Nominal probability of each bucket a quantile grid partitions space into.
+
+    For {.05,.25,.5,.75,.95} this is [.05,.20,.25,.25,.20,.05] - six buckets
+    from five cut points, and emphatically not uniform.
+    """
+    a = sorted(alphas)
+    return [a[0], *[a[i] - a[i - 1] for i in range(1, len(a))], 1.0 - a[-1]]
+
+
 def enforce_monotone(values: dict[float, float]) -> dict[float, float]:
     """Repair crossed quantiles by taking a running maximum.
 
@@ -314,6 +324,10 @@ class DistributionScore:
     coverage_50: float = 0.0
     mean_width_90: float = 0.0
     pit_values: list[float] = field(default_factory=list)
+    # The quantile levels the PIT values came from. Without them the buckets
+    # are unknown and the uniformity test has to guess at their widths, which
+    # is exactly the mistake that made the old one useless.
+    alphas: tuple[float, ...] = ()
 
     @property
     def coverage_error_90(self) -> float:
@@ -324,19 +338,33 @@ class DistributionScore:
         """90% band covers 90% of outcomes, within three points."""
         return self.coverage_error_90 <= 0.03
 
-    def pit_uniformity(self, bins: int = 5) -> float:
-        """Chi-square-like departure from uniform. Zero is perfect.
+    def pit_uniformity(self) -> float:
+        """Chi-square departure from the buckets the quantile grid defines.
 
         A hump in the middle means intervals too wide; humps at the edges mean
         too narrow, which is the direction that loses money.
+
+        **The buckets are not equal in width, and an earlier version of this
+        assumed they were.** A five-quantile forecast at {.05,.25,.5,.75,.95}
+        partitions the outcome space into six buckets whose nominal
+        probabilities are 5%, 20%, 25%, 25%, 20% and 5% - not a uniform 1/6 or
+        1/5 each. Comparing the observed counts against equal expected counts
+        gave a *perfectly calibrated* model a score of 0.150 rather than 0, and
+        left almost no discrimination near that floor: a model whose 90% band
+        covered 63% scored 0.152, which is 1.4% worse than perfect while being
+        catastrophically miscalibrated.
+
+        Against the correct buckets the same three score 3.9, 339 and 16 513.
         """
-        if not self.pit_values:
+        if not self.pit_values or not self.alphas:
             return 0.0
-        counts = [0] * bins
-        for p in self.pit_values:
-            counts[min(bins - 1, int(p * bins))] += 1
-        expected = len(self.pit_values) / bins
-        return sum((c - expected) ** 2 / expected for c in counts) / len(self.pit_values)
+        probs = pit_bucket_probabilities(self.alphas)
+        index = {level: i for i, level in enumerate([*sorted(self.alphas), 1.0])}
+        counts = [0] * len(probs)
+        for value in self.pit_values:
+            counts[index[value]] += 1
+        n = len(self.pit_values)
+        return sum((c - n * e) ** 2 / (n * e) for c, e in zip(counts, probs, strict=True) if e > 0)
 
     def render(self) -> str:
         cal = "calibrated" if self.well_calibrated else "MISCALIBRATED"
@@ -355,6 +383,7 @@ def score_forecasts(
     out = DistributionScore(name=name, n=len(actuals))
     if not actuals:
         return out
+    out.alphas = tuple(sorted(forecasts[0].quantiles))
 
     crps_total = pinball_total = width_total = 0.0
     covered_90 = covered_50 = 0
