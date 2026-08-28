@@ -201,7 +201,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | | ☐ |
 | **M70** | IV surface fitter | L7 | P7 | M14 | ✅ | ☑ |
 | **M71** | Greeks engine | L7 | P7 | M70 | ✅ | ☑ |
-| **M72** | Structure enumerator & liquidity filter | L7 | P7 | M71 | | ☐ |
+| **M72** | Structure enumerator & liquidity filter | L7 | P7 | M71 | ✅ | ☑ |
 | **M73** | Monte Carlo P&L engine | L7 | P7 | M72, M60, M56 | | ☐ |
 | **M74** | Cost model (PIT rates, STT bases, slippage) | L7 | P7 | M01 | | ☑ |
 | **M75** | Position sizing (fractional Kelly on a lower bound) | L7 | P7 | M59, M74 | | ☑ |
@@ -1209,11 +1209,42 @@ staleness check during aggregation. All five caught.
 
 ---
 
-#### M72 · Structure enumerator & liquidity filter
+#### M72 · Structure enumerator & liquidity filter ✅
 **Tasks**
-- [ ] Candidates: naked, vertical debit, straddle/strangle, iron condor, calendar *(later)*, no-trade
-- [ ] **Liquidity eligibility**: OI floor, recent volume floor, spread ≤ x% of mid
-- [ ] Strike grid limited to eligible strikes only
+- [x] Candidates: naked, vertical debit, straddle/strangle, iron condor, calendar *(later)*, no-trade
+- [x] **Liquidity eligibility**: OI floor, recent volume floor, spread ≤ x% of mid
+- [x] Strike grid limited to eligible strikes only
+
+**Built** `libs/ms_options/structures.py`, `tests/unit/test_structures.py` (32 tests).
+Legs are `greeks.Leg`, so any candidate can be handed to `greeks.aggregate` and
+priced without a second representation.
+
+**No-trade is a candidate, not a fallback.** It is returned on every chain,
+including an empty one, and it is first in the list. An enumerator that returns
+only tradeable structures hands the ranker a set where *something* always wins,
+and "the best of a bad set" arrives in exactly the same shape as "a good
+opportunity" — a structure with a score. Making doing nothing compete on the
+same axis is what lets a quiet Tuesday recommend no position for a reason,
+rather than through an exception path someone has to remember to write.
+
+**Per-leg liquidity passing does not make a structure tradeable.** Crossing cost
+compounds with leg count: four legs each inside the spread cap is a round trip
+crossing four spreads, and on a condor whose maximum profit is the credit
+received that routinely exceeds everything the structure could ever make — while
+every individual leg passes every individual filter. `viable_after_crossing`
+compares crossing cost against what the structure can actually win, and an
+unbounded structure is judged against its own debit, because "can make unlimited
+money" is not an answer to "can it clear its spread".
+
+The grid is filtered **before** structures are built, and `Grid.nearest` searches
+only the grid — a nearest-strike helper over the full ladder returns a strike
+that looks right, is not eligible, and fails at the broker rather than at the
+filter. Missing `oi` or `volume` is a rejection, not a pass: an absent field is
+not evidence of liquidity.
+
+Mutation-tested: dropping no-trade, treating missing fields as fine, letting
+`nearest` reach past the grid, disabling the crossing filter, and reversing the
+call vertical into a credit spread. All five caught.
 
 **Verify** `pytest tests/unit/test_structures.py -k "illiquid_excluded or no_trade_always_candidate"`
 
