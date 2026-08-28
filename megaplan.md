@@ -214,7 +214,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M84** | Live broker adapter | L8 | P9 | M83, M76 | | ☐ |
 | **M85** | Stress-scenario suite | L8 | P7 | M82 | | ☑ |
 | **M90** | API gateway & WebSocket | L9 | P8 | M04 | | ☑ |
-| **M91** | Dashboard UI | L9 | P8 | M90 | | ☐ |
+| **M91** | Dashboard UI | L9 | P8 | M90 | ⚙ | ◐ |
 | **M92** | Alerting | L9 | P8 | M90 | | ☑ |
 | **M93** | Paper ledger & outcome resolver | L9 | P8 | M80 | | ☑ |
 | **M94** | Attribution & calibration reports | L9 | P8 | M93 | | ☑ |
@@ -1627,12 +1627,44 @@ and that is the file the verify command should point at.
 
 ---
 
-#### M91 · Dashboard UI
-- [ ] Five panels per blueprint Ch.16: event stream · fan chart vs implied · recommendation · calibration/attribution · status bar
-- [ ] Suppressed events shown greyed — the user must see what was ignored
-- [ ] Every number hoverable → computation + as-of timestamp
+#### M91 · Dashboard UI ◐ *partial*
+- [x] Five panels per blueprint Ch.16: event stream · fan chart vs implied · recommendation · calibration/attribution · status bar
+- [x] Suppressed events shown greyed — the user must see what was ignored
+- [x] Every number hoverable → computation + as-of timestamp
 - [ ] Click any recommendation → full replay view
-- [ ] **Unmissable PAPER/LIVE indicator**
+- [x] **Unmissable PAPER/LIVE indicator**
+
+**Built** `services/dashboard/` — `index.html`, `app.css`, `app.js`, `data.js`,
+plus `tests/manual/dashboard_checklist.md`. Serve with `python tasks.py dashboard`.
+
+A workspace rather than a page: toolbar, tool rail, canvas chart with a
+crosshair, a tabbed drawer, a side panel, a status bar. Canvas rather than SVG
+because the crosshair redraws on every pointer move, and swapping attributes on
+sixty SVG nodes at 60fps is how a dashboard starts to feel heavy.
+
+**PAPER is structural, not a badge** — the chip carries diagonal hatching and
+says what the mode *means*. If you can look at the screen for three seconds and
+not know which mode you are in, the requirement has failed regardless of whether
+the element is present.
+
+Toggling a chart series **redraws** rather than hiding a layer, so the y-axis
+re-fits to what is actually shown; a hidden layer leaves the old scale and the
+remaining series then reads against a range that includes something invisible.
+
+All seven events are listed, four dimmed, each naming the specific rule that
+suppressed it — including the 10:44 anonymous-social severity-9 item, which is
+the AP-hack case: loud, high-severity, low-credibility, shown and not acted on.
+
+Every derived number carries a tooltip saying **how it is computed**, not what
+it is called.
+
+**Still open, and marked partial for it:**
+- The **Playwright smoke test is not written**. Until it is, nothing here is
+  checked on a commit and the manual checklist is the whole verification.
+- **Click a recommendation → full replay view** does not exist. The panel shows
+  the decision, not the inputs that produced it.
+- The workspace reads a session snapshot from `data.js`; it is not wired to the
+  API (M90) and does not update.
 
 **Verify** manual checklist in `tests/manual/dashboard_checklist.md` + Playwright smoke test
 

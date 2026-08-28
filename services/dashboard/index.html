@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MarketSage Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ── top bar ───────────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="brand"><span class="glyph"></span>MarketSage&nbsp;<em>Desk</em></div>
+
+    <div class="symbol">
+      <span class="tick" id="sym">NIFTY</span>
+      <span class="exp" id="exp">24 SEP 26</span>
+    </div>
+
+    <div class="seg" role="group" aria-label="Forecast horizon">
+      <button data-h="15">15m</button>
+      <button data-h="30">30m</button>
+      <button data-h="60" aria-pressed="true">60m</button>
+    </div>
+
+    <div class="seg" role="group" aria-label="Chart series">
+      <button data-series="fan" aria-pressed="true">Fan</button>
+      <button data-series="implied" aria-pressed="true">Implied 1&sigma;</button>
+      <button data-series="pup" aria-pressed="false">P(up)</button>
+    </div>
+
+    <div class="grow"></div>
+
+    <div class="mode-chip">
+      <b>PAPER</b>
+      <span>no order reaches a broker</span>
+    </div>
+
+    <button class="iconbtn" id="toggle-side" title="Toggle side panel" aria-label="Toggle side panel">
+      <svg viewBox="0 0 20 20"><rect x="2.5" y="3.5" width="15" height="13"/><line x1="13" y1="3.5" x2="13" y2="16.5"/></svg>
+    </button>
+    <button class="iconbtn" id="toggle-theme" title="Toggle theme" aria-label="Toggle theme">
+      <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="4.2"/><line x1="10" y1="1.6" x2="10" y2="4"/><line x1="10" y1="16" x2="10" y2="18.4"/><line x1="1.6" y1="10" x2="4" y2="10"/><line x1="16" y1="10" x2="18.4" y2="10"/></svg>
+    </button>
+  </header>
+
+  <!-- ── body ──────────────────────────────────────────────────────── -->
+  <div class="body" id="body">
+
+    <nav class="rail" aria-label="Workspace">
+      <button aria-pressed="true" title="Forecast" aria-label="Forecast">
+        <svg viewBox="0 0 20 20"><path d="M2 14 L6 9 L10 11 L14 5 L18 7"/><path d="M2 17 L18 17"/></svg>
+      </button>
+      <button title="Surface" aria-label="Surface">
+        <svg viewBox="0 0 20 20"><path d="M2 13 C6 5, 14 5, 18 13"/><line x1="2" y1="16" x2="18" y2="16"/><line x1="10" y1="7" x2="10" y2="16"/></svg>
+      </button>
+      <button title="Book" aria-label="Book">
+        <svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12"/><line x1="3" y1="8" x2="17" y2="8"/><line x1="10" y1="8" x2="10" y2="16"/></svg>
+      </button>
+      <div class="sep"></div>
+      <button title="Events" aria-label="Events">
+        <svg viewBox="0 0 20 20"><line x1="4" y1="6" x2="16" y2="6"/><line x1="4" y1="10" x2="16" y2="10"/><line x1="4" y1="14" x2="11" y2="14"/></svg>
+      </button>
+      <button title="Risk gates" aria-label="Risk gates">
+        <svg viewBox="0 0 20 20"><path d="M10 2.5 L17 5.5 V10 C17 14, 13.5 16.5, 10 17.5 C6.5 16.5, 3 14, 3 10 V5.5 Z"/></svg>
+      </button>
+    </nav>
+
+    <!-- ── workspace ───────────────────────────────────────────────── -->
+    <main class="workspace">
+
+      <section class="chart-well">
+        <canvas id="chart"></canvas>
+
+        <div class="legend" id="legend">
+          <div class="title">Forecast distribution &middot; 60 min</div>
+        </div>
+
+        <div class="chart-note">
+          Log-return in basis points. Bands are empirical quantiles of 5&nbsp;000
+          simulated paths, calibrated onto the fitted quantile heads.
+        </div>
+      </section>
+
+      <!-- ── bottom drawer ─────────────────────────────────────────── -->
+      <section class="drawer" id="drawer">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-pane="events">
+            Event stream <span class="count" id="cnt-events">7</span>
+          </button>
+          <button role="tab" aria-selected="false" data-pane="structures">
+            Structures <span class="count" id="cnt-str">1 302</span>
+          </button>
+          <button role="tab" aria-selected="false" data-pane="gates">
+            Gates <span class="count" id="cnt-gates">2 failing</span>
+          </button>
+          <button role="tab" aria-selected="false" data-pane="sources">
+            Sources <span class="count" id="cnt-src">0 / 6</span>
+          </button>
+          <div class="grow"></div>
+          <button id="toggle-drawer" title="Collapse panel" aria-label="Collapse panel"
+                  style="border-left:1px solid var(--line-soft)">&#9662;</button>
+        </div>
+
+        <div class="drawer-body">
+          <div class="pane" data-pane="events" data-active>
+            <div id="events"></div>
+            <div class="prose">
+              Four of the seven were suppressed and all four stay on the list. A stream
+              that only shows what was acted on cannot answer the question somebody
+              actually asks after a bad day, which is what the system saw and decided
+              against.
+            </div>
+          </div>
+
+          <div class="pane" data-pane="structures">
+            <table>
+              <thead><tr>
+                <th>Structure</th><th>Legs</th><th>Debit</th><th>Crossing</th><th>Max&nbsp;+</th><th>Max&nbsp;&minus;</th>
+              </tr></thead>
+              <tbody id="structures"></tbody>
+            </table>
+            <div class="prose">
+              1&nbsp;342 candidates enumerated, <b>40 dropped on crossing cost</b> — each
+              of them passing every per-leg liquidity filter. Crossing cost compounds with
+              leg count: four legs is a round trip across four spreads, and on a condor
+              whose maximum profit is the credit received that can exceed everything the
+              structure could ever make.
+            </div>
+          </div>
+
+          <div class="pane" data-pane="gates">
+            <div class="gates" id="gates"></div>
+            <div class="prose">
+              Every figure in this workspace was computed by the pipeline in this
+              repository on <b>synthetic inputs whose answers were known in advance</b>.
+              That establishes the arithmetic and says nothing about edge. Exactly one
+              component has ever run on real market data: the overnight gap forecaster,
+              on 496 sessions of free daily bars, where it lost to a naive baseline by
+              13.7%.
+            </div>
+          </div>
+
+          <div class="pane" data-pane="sources">
+            <table>
+              <thead><tr>
+                <th>Source</th><th>Tier</th><th>Credibility</th><th>Directional</th><th>Terms</th><th>State</th>
+              </tr></thead>
+              <tbody id="sources"></tbody>
+            </table>
+            <div class="prose">
+              Every source is disabled pending its terms review, and that is the
+              configured state rather than a fault. A source below 0.50 credibility may
+              raise an alert and may <b>never</b> open a position on its own — the rule is
+              enforced in the config loader and again in the code that reads it.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ── side panel ──────────────────────────────────────────────── -->
+    <aside class="side">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-side="reco">Recommendation</button>
+        <button role="tab" aria-selected="false" data-side="book">Book</button>
+        <button role="tab" aria-selected="false" data-side="surface">Surface</button>
+      </div>
+
+      <div class="side-body">
+        <div class="pane" data-side="reco" data-active>
+          <div class="verdict">
+            <div class="v" id="verdict">No trade</div>
+            <p id="verdict-why"></p>
+          </div>
+          <div class="block">
+            <div class="block-head"><h3>Decision</h3><span class="meta" id="reco-id"></span></div>
+            <div class="block-body"><table><tbody id="reco"></tbody></table></div>
+          </div>
+          <div class="block">
+            <div class="block-head"><h3>Distribution</h3><span class="meta">60 min</span></div>
+            <div class="block-body"><table><tbody id="dist"></tbody></table></div>
+          </div>
+        </div>
+
+        <div class="pane" data-side="book">
+          <div class="block">
+            <div class="block-head"><h3>Aggregate</h3><span class="meta" id="book-sub"></span></div>
+            <div class="block-body"><table><tbody id="greeks"></tbody></table></div>
+          </div>
+          <div class="block">
+            <div class="block-head"><h3>Legs</h3><span class="meta">smile vs Black-76</span></div>
+            <div class="block-body">
+              <table>
+                <thead><tr><th>Leg</th><th>IV</th><th>Price</th><th>&Delta;</th><th>&Delta;<sub>b76</sub></th></tr></thead>
+                <tbody id="legs"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="prose">
+            Hedging on the Black-76 delta leaves this book short by
+            <span class="mono">5.47</span> units of forward, in the same direction every
+            day. It presents as slippage.
+          </div>
+        </div>
+
+        <div class="pane" data-side="surface">
+          <div class="block">
+            <div class="block-head"><h3>Fitted slice</h3><span class="meta">T = 0.0767</span></div>
+            <div class="block-body"><table><tbody id="surface"></tbody></table></div>
+          </div>
+          <div class="block">
+            <div class="block-head"><h3>SVI parameters</h3><span class="meta">stored, not derived</span></div>
+            <div class="block-body"><table><tbody id="svi"></tbody></table></div>
+          </div>
+          <div class="prose">
+            Parameters are what gets stored; level, slope and curvature are derived from
+            them. Storing the derived features instead would make a past surface
+            impossible to re-price from, and rebuilding a past recommendation is the
+            point.
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ── status bar ────────────────────────────────────────────────── -->
+  <footer class="status">
+    <div><span class="k">session</span> 2026-08-27</div>
+    <div><span class="k">as of</span> 11:30:00 IST</div>
+    <div><span class="k">feed</span> <span class="warn">synthetic</span></div>
+    <div><span class="k">surface age</span> 4s</div>
+    <div><span class="k">config</span> 31daaefe17de7308</div>
+    <div class="grow"></div>
+    <div id="cursor-readout"><span class="k">cursor</span> &mdash;</div>
+  </footer>
+</div>
+
+<div id="tip" role="tooltip"></div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

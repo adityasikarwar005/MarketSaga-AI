@@ -16,6 +16,7 @@ Cross-platform, no `make` required.
     python tasks.py verify    the full gate check: lint + typecheck + test
     python tasks.py ci        the six CI stages, each reporting separately
     python tasks.py restore-drill   the monthly restore drill's self-test
+    python tasks.py dashboard  serve the workspace at http://127.0.0.1:8787
     python tasks.py holidays  discover the exchange calendar (and why)
     python tasks.py qc        data quality gates for every recorded day
     python tasks.py research  end-to-end research smoke test on a recorded day
@@ -57,7 +58,7 @@ def setup() -> None:
 
 
 def _docker() -> str | None:
-    """Path to docker.exe, or None.
+    r"""Path to docker.exe, or None.
 
     `shutil.which` alone is not enough on Windows. Docker Desktop installs to
     %LOCALAPPDATA%\Programs\DockerDesktop on current versions - not to
@@ -150,6 +151,35 @@ def restore_drill() -> None:
     """MA5 - prove the drill detects damage, without needing a clean machine."""
     args = sys.argv[2:] or ["--self-test"]
     run(_py(), str(ROOT / "jobs" / "restore_drill.py"), *args, check=False)
+
+
+def dashboard() -> None:
+    """M91 - serve the dashboard.
+
+    A plain static server. The workspace reads its session from `data.js`
+    rather than fetching JSON, so it also opens straight from the filesystem -
+    but served is how it will actually run, and a thing only ever opened one
+    way acquires assumptions about that way.
+    """
+    import http.server
+    import socketserver
+
+    root = ROOT / "services" / "dashboard"
+    port = int(sys.argv[2]) if len(sys.argv) > 2 else 8787
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a: object, **kw: object) -> None:
+            super().__init__(*a, directory=str(root), **kw)  # type: ignore[arg-type]
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            pass
+
+    with socketserver.TCPServer(("127.0.0.1", port), Handler) as srv:
+        print(f"  MarketSage Desk on http://127.0.0.1:{port}  (ctrl-c to stop)")
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            print("\n  stopped")
 
 
 def status() -> None:
@@ -390,6 +420,7 @@ COMMANDS = {
     "verify": verify,
     "ci": ci,
     "restore-drill": restore_drill,
+    "dashboard": dashboard,
     "status": status,
 }
 
