@@ -35,6 +35,11 @@ api = [
     "httpx>=0.27",           # the test client, and the only way to exercise the ASGI app
     "msgpack>=1.0",          # live-channel framing
 ]
+# Publishing the dashboard as a Hugging Face Space. Separate from everything
+# else because deploying is not part of building, and nothing in libs/ imports it.
+deploy = [
+    "huggingface_hub>=0.24",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
