@@ -15,6 +15,9 @@ python tasks.py fmt           # black + ruff --fix
 python tasks.py typecheck     # mypy (strict on libs/, relaxed annotations on jobs/ and tasks.py)
 python tasks.py status        # config health and what blocks the current gate
 python tasks.py ci            # the six CI stages separately: unit, determinism, parity, leakage-lint, ap-hack, stress
+# GitHub Actions runs the same stages plus lint/typecheck, an audit-chain check and infra tests.
+# After pushing: `gh run watch <id> --exit-status`. The pipeline was red for four pushes once
+# because nobody looked; it is not done when it is written, it is done when a run is green.
 python tasks.py restore-drill # prove the restore drill still detects a damaged backup
 ```
 

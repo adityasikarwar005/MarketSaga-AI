@@ -1498,8 +1498,24 @@ pytest tests/unit/test_kill_policy.py -k "auto_disables or requires_change_to_re
 | **MA1** | Daily rhythm | 06:30 briefing · 08:45 preflight · session · 15:20 forced flatten · 15:45 post-session · 18:00 nightly | `pytest tests/integration/test_daily_rhythm.py` |
 | **MA2** | Retraining | Weekly incremental, quarterly full; promote only if it beats incumbent on last 4 weeks OOS | `python jobs/retrain.py --dry-run --report` |
 | **MA3** ✅ | Drift monitors | Feature PSI, prediction-distribution KL, rolling Brier; breach blocks auto-execution | `pytest tests/unit/test_drift.py -k "psi_breach_blocks_auto"` |
-| **MA4** ✅ | CI pipeline | On every commit: unit + determinism + parity + leakage lint + AP-hack + stress | `python tasks.py ci` · `.github/workflows/ci.yml` |
+| **MA4** ✅ | CI pipeline | On every commit: unit + determinism + parity + leakage lint + AP-hack + stress | `python tasks.py ci` · run 33145124573 green 9/9 |
 | **MA5** ✅ | Backup & restore | Nightly dump + Parquet sync; **monthly restore drill on a clean machine** | `python jobs/restore_drill.py --target clean-vm` · `--self-test` |
+
+
+**MA4 was marked done before the pipeline was ever watched, and it was red for
+four pushes.** Two causes, both in code written for it: the stage runner assumed
+a `.venv` that a CI runner does not have, and mypy failed on stubs this machine
+happens to have installed while the declared extras never install them. The
+second is the more useful finding — the local environment had drifted from
+`pyproject.toml`, and nothing could see that until something built the
+environment from the file. A third followed: the `unit` stage ran a smaller
+test set than a developer does, because `pyarrow`/`duckdb` sit in the `infra`
+extra and CI was not installing it.
+
+The lesson is procedural rather than technical: **a pipeline is not done when it
+is written, it is done when a run of it is green.** `gh run watch <id>
+--exit-status` after pushing.
+
 
 ---
 
