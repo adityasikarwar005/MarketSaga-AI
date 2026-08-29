@@ -18,6 +18,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from itertools import islice
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -593,7 +594,7 @@ class TestStrikeScale:
     # Real rows from the published master. The symbol carries its own strike,
     # which is what makes these assertions a closed form rather than a copy of
     # whatever the code happened to produce.
-    CDS_ROWS = [
+    CDS_ROWS: ClassVar[list[tuple[str, str, float]]] = [
         ("USDINR26O2397.25PE", "972500000.000000", 97.25),
         ("JPYINR26NOV57.25CE", "572500000.000000", 57.25),
         ("USDJPY26OCT167PE", "1670000000.000000", 167.0),

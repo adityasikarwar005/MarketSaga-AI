@@ -1724,3 +1724,39 @@ genuine work, which is the actual hazard.
 Reverted rather than committed. The hook config needs `ruff-format` dropped and
 `black` pinned to the version `tasks.py` uses, but changing what formats every
 file in the repository is not something to slip into an unrelated branch.
+
+## The linters float, so CI and the working copy disagree by construction
+
+The first push of this work went red on `lint + typecheck` in nineteen seconds,
+having passed `python tasks.py verify` locally minutes earlier. The finding was
+real - `RUF012 Mutable default value for class attribute` on a list used as a
+`parametrize` source - and the local ruff simply did not have it.
+
+    local  ruff 0.16.4  -> All checks passed
+    CI     ruff 0.16.5  -> Found 1 error
+
+One patch version apart. `pyproject.toml` asks for `ruff>=0.5` and CI runs
+`pip install -e ".[dev]"` on a clean runner, so CI always resolves to whatever
+was released most recently, while a working copy keeps whatever it installed on
+the day it was set up. The gap widens on its own, silently, and the first
+symptom is a red pipeline on a change that has nothing to do with the rule that
+fired.
+
+That is the third instance of the same shape in one session, which is what makes
+it worth a section rather than a line:
+
+| | working copy | CI / hooks |
+|---|---|---|
+| ruff | 0.16.4 | 0.16.5 |
+| black | 26.5.1 | 24.8.0 (pre-commit) |
+| formatter | black | `ruff-format` also runs (pre-commit) |
+
+A floating lower bound is right for a library a project imports and wrong for a
+tool that decides whether the build passes. `mypy>=1.10`, `black>=24.0` and
+`ruff>=0.5` all carry it. Pinning them is a small change with a wide blast
+radius - every contributor's next `pip install -e ".[dev]"` moves - so it is
+recorded here rather than done in passing.
+
+Local ruff was upgraded to 0.16.5 to match, and the failure now reproduces in
+the working copy before it can reach a runner. That fixes today, not the
+mechanism.
