@@ -23,18 +23,63 @@ if str(ROOT) not in sys.path:
 from libs.ms_core import env as envmod  # noqa: E402
 from libs.ms_core.clock import RealClock  # noqa: E402
 from libs.ms_data.angelone import (  # noqa: E402
+    SCRIP_MASTER_CACHE,
     AngelAuthError,
     AngelCredentials,
     AngelOneFeed,
+    InstrumentMaster,
+    ScripMasterError,
+    load_scrip_master,
     login,
 )
 
 OK = "  ok    "
 NO = "  FAIL  "
+WARN = "  warn  "
+
+
+def check_master(*, refresh: bool) -> int:
+    """The token map, checked first because it needs no credential.
+
+    Everything the feed subscribes to is resolved through the scrip master, and
+    the master is public. So this is the one part of the setup that can be
+    proved working before an Angel account exists - which is the point of
+    running this the evening before.
+    """
+    clock = RealClock()
+    today = clock.now().date()
+
+    if refresh:
+        try:
+            master = load_scrip_master(clock, refresh=True)
+        except ScripMasterError as exc:
+            print(f"{NO}{exc}")
+            return 1
+        except OSError as exc:
+            print(f"{NO}could not reach the scrip master: {exc}")
+            return 1
+        print(f"{OK}scrip master downloaded, {len(master.rows):,} instruments")
+        return 0
+
+    cached = InstrumentMaster.load(SCRIP_MASTER_CACHE)
+    if cached is None:
+        print(f"{WARN}no scrip master cached at {SCRIP_MASTER_CACHE.name}.")
+        print("        Re-run with --refresh-master to download it. It is public,")
+        print("        so this works before the account does, and without it the")
+        print("        feed has no token to subscribe to.")
+        return 0
+    if cached.fetched_on != today:
+        print(f"{WARN}scrip master is from {cached.fetched_on}, not {today}.")
+        print("        Angel republishes it daily and an option token belongs to")
+        print("        one expiry, so a master from before a roll resolves a live")
+        print("        symbol to a contract that no longer trades - and resolve()")
+        print("        cannot tell. --refresh-master replaces it.")
+        return 0
+    print(f"{OK}scrip master is today's, {len(cached.rows):,} instruments")
+    return 0
 
 
 def check(*, connect: bool) -> int:
-    print()
     e = envmod.current()
     if not envmod.may_hold_broker_credentials(e):
         print(
@@ -104,7 +149,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="actually log in (uses one TOTP window; caches the session for today)",
     )
-    return check(connect=p.parse_args(argv).connect)
+    p.add_argument(
+        "--refresh-master",
+        action="store_true",
+        help="download today's scrip master (public; needs no account)",
+    )
+    args = p.parse_args(argv)
+    print()
+    rc = check_master(refresh=args.refresh_master)
+    if rc:
+        return rc
+    return check(connect=args.connect)
 
 
 if __name__ == "__main__":

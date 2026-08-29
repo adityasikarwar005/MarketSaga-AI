@@ -94,9 +94,52 @@ EXCHANGE_TYPE = {"NSE_CM": 1, "NSE_FO": 2, "BSE_CM": 3, "BSE_FO": 4, "MCX_FO": 5
 MIN_PLAUSIBLE_RUPEES = 0.01
 MAX_PLAUSIBLE_RUPEES = 1_000_000.0
 
+# NSE cash and F&O together run to six figures of rows. A master with fewer than
+# this is a truncated download, not a quiet day.
+MIN_PLAUSIBLE_SCRIP_ROWS = 10_000
+
+# Strike is NOT in paise across the whole scrip master. The currency and
+# interest-rate segment (CDS) publishes it scaled by ten million: USDINR's 97.25
+# strike arrives as 972500000. Every other segment uses paise.
+#
+# This was measured, not assumed. Angel's option symbols carry their own strike
+# (USDINR26O23_97.25_PE), which makes the file self-checking: splitting each
+# symbol on the expiry from its own `expiry` field and comparing the tail
+# against the `strike` field gives 9,290 CDS rows at 1e7 with no exceptions,
+# and NFO, BFO, MCX and NCO uniformly at 1e2. The reason for 1e7 is not
+# documented anywhere the author could find, so it is recorded as an observed
+# fact rather than explained.
+#
+# Left as paise, a currency strike decodes to 9,725,000 instead of 97.25 -
+# every moneyness, every strike distance and every surface fit on the CDS
+# segment wrong by five orders of magnitude, with nothing raising.
+STRIKE_SCALE_BY_SEGMENT = {"CDS": 10_000_000.0}
+DEFAULT_STRIKE_SCALE = 100.0
+
+# Anything without a strike - equities, futures, the underlying rows - carries
+# -1, not an empty field. Exactly one negative value appears in the whole master
+# across 24,035 rows, so this is a sentinel rather than a data error, and it
+# must not reach the scale check: -1 paise is a "not a plausible strike" raise
+# on the most ordinary rows in the file.
+NO_STRIKE_SENTINEL = -1.0
+
+USER_AGENT = "Mozilla/5.0 (compatible; MarketSage research)"
+
 
 class AngelAuthError(RuntimeError):
     """Raised when there is no usable session."""
+
+
+class ScripMasterError(RuntimeError):
+    """Raised when a downloaded scrip master cannot be trusted.
+
+    A truncated response, or the HTML error page Angel serves on a bad day,
+    parses to zero rows without raising anything. Nothing downstream would
+    complain either: the feed would subscribe to no tokens and stay silent,
+    which is indistinguishable from a closed market. That is the same failure
+    shape as the paise bug and it gets the same treatment - refuse at the
+    boundary rather than pass on a plausible-looking emptiness.
+    """
 
 
 class PriceScaleError(ValueError):
@@ -230,11 +273,29 @@ def _totp_now(secret: str) -> str:
     return code
 
 
+def _vendor_import_error(exc: ImportError) -> AngelAuthError:
+    """Report what actually failed, not what is usually wrong.
+
+    ``smartapi-python`` imports ``logzero`` without declaring it, so on a clean
+    install the package is present and importing it still raises. Reporting that
+    as "smartapi-python is missing" sends the reader to reinstall a package that
+    is already there - the fix is named in the exception and nowhere else.
+    """
+    missing = getattr(exc, "name", "") or "a dependency"
+    if missing in ("SmartApi", "smartapi"):
+        return AngelAuthError('smartapi-python is missing. pip install -e ".[broker]"')
+    return AngelAuthError(
+        f"smartapi-python is installed but cannot import: {exc}. The vendor "
+        f"package imports {missing!r} without declaring it, so pip does not "
+        f"bring it in. Install it directly: pip install {missing}"
+    )
+
+
 def _smartconnect(api_key: str) -> Any:  # pragma: no cover - needs the vendor package
     try:
         from SmartApi import SmartConnect
-    except ImportError:
-        raise AngelAuthError('smartapi-python is missing. pip install -e ".[broker]"') from None
+    except ImportError as exc:
+        raise _vendor_import_error(exc) from None
     return SmartConnect(api_key=api_key)
 
 
@@ -323,6 +384,36 @@ def paise_to_rupees(raw: int | float | None) -> float | None:
     return rupees
 
 
+def _decode_strike(raw: float | None, exch_seg: str) -> float:
+    """Strike in rupees, or 0.0 for the instruments that do not have one."""
+    if raw is None or raw == NO_STRIKE_SENTINEL:
+        return 0.0
+    return strike_to_rupees(raw, exch_seg) or 0.0
+
+
+def strike_to_rupees(raw: int | float | None, exch_seg: str) -> float | None:
+    """Decode a scrip-master strike, which is not always in paise.
+
+    Separate from :func:`paise_to_rupees` because the scale is a property of the
+    segment rather than of the field, and a single shared constant is exactly
+    how the CDS rows came to be read as millions.
+    """
+    if raw is None:
+        return None
+    scale = STRIKE_SCALE_BY_SEGMENT.get(exch_seg.upper(), DEFAULT_STRIKE_SCALE)
+    rupees = float(raw) / scale
+    if rupees == 0.0:
+        return 0.0
+    if not (MIN_PLAUSIBLE_RUPEES <= abs(rupees) <= MAX_PLAUSIBLE_RUPEES):
+        raise PriceScaleError(
+            f"{raw!r} on segment {exch_seg!r} decodes to {rupees:,.2f}, which is "
+            f"not a plausible strike ({MIN_PLAUSIBLE_RUPEES} to "
+            f"{MAX_PLAUSIBLE_RUPEES:,.0f}). Either the segment's scale is not "
+            f"{scale:,.0f} or the field is not a strike; do not scale past this."
+        )
+    return rupees
+
+
 def tick_from_message(msg: dict[str, Any], *, src: int = 1) -> Tick:
     """Decode one SmartWebSocketV2 payload into a :class:`Tick`.
 
@@ -404,15 +495,16 @@ class InstrumentMaster:
                 token = int(r["token"])
             except (KeyError, TypeError, ValueError):
                 continue
+            exch_seg = str(r.get("exch_seg", ""))
             rows.append(
                 ScripRow(
                     token=token,
                     symbol=str(r.get("symbol", "")),
                     name=str(r.get("name", "")),
-                    exch_seg=str(r.get("exch_seg", "")),
+                    exch_seg=exch_seg,
                     instrument_type=str(r.get("instrumenttype", "")),
                     expiry=_parse_expiry(r.get("expiry")),
-                    strike=paise_to_rupees(_as_float(r.get("strike"))) or 0.0,
+                    strike=_decode_strike(_as_float(r.get("strike")), exch_seg),
                     lot_size=int(_as_float(r.get("lotsize")) or 0),
                 )
             )
@@ -460,6 +552,124 @@ class InstrumentMaster:
             ),
             encoding="utf-8",
         )
+
+    @staticmethod
+    def load(path: Path = SCRIP_MASTER_CACHE) -> InstrumentMaster | None:
+        """Read a cached master, or ``None`` when there is no usable one.
+
+        Expiries are read back with :func:`date.fromisoformat`, not with
+        :func:`_parse_expiry`: :meth:`save` already normalised them, and running
+        the vendor parser over its own output would silently drop every row on
+        the day the two formats disagree.
+        """
+        if not path.exists():
+            return None
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+            rows = [
+                ScripRow(
+                    token=int(r["token"]),
+                    symbol=str(r["symbol"]),
+                    name=str(r["name"]),
+                    exch_seg=str(r["exch_seg"]),
+                    instrument_type=str(r["instrument_type"]),
+                    expiry=date.fromisoformat(r["expiry"]) if r.get("expiry") else None,
+                    strike=float(r["strike"]),
+                    lot_size=int(r["lot_size"]),
+                )
+                for r in d["rows"]
+            ]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            # A corrupt cache is a reason to download again, not to crash at 09:14.
+            log.warning("angel scrip master cache unreadable, ignoring", fields={"path": str(path)})
+            return None
+        fetched = d.get("fetched_on")
+        return InstrumentMaster(
+            rows=rows, fetched_on=date.fromisoformat(fetched) if fetched else None
+        )
+
+
+def _http_get(url: str, *, timeout: float = 60.0) -> bytes:  # pragma: no cover - network
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data: bytes = resp.read()
+        return data
+
+
+def fetch_scrip_master(
+    clock: Clock,
+    *,
+    getter: Callable[[str], bytes] | None = None,
+    url: str = SCRIP_MASTER_URL,
+) -> InstrumentMaster:
+    """Download the scrip master as published today.
+
+    Deliberately credential-free. The file is public, so the token map can be
+    built - and this entire path exercised - before an Angel account exists,
+    which is the difference between finding a problem tonight and finding it at
+    09:14. ``getter`` is injected for the same reason every other network call
+    in this adapter is.
+    """
+    fetch = getter if getter is not None else _http_get
+    raw = fetch(url)
+    try:
+        payload = json.loads(raw.decode("utf-8", "replace"))
+    except json.JSONDecodeError as exc:
+        raise ScripMasterError(
+            f"the scrip master at {url} did not parse as JSON ({exc}). The usual "
+            "cause is an HTML error or maintenance page served with a 200, which "
+            "would otherwise decode to zero instruments."
+        ) from None
+    if not isinstance(payload, list):
+        raise ScripMasterError(
+            f"the scrip master at {url} is a {type(payload).__name__}, not a list "
+            "of instruments. The published layout has changed and reading it "
+            "anyway would be a guess."
+        )
+    master = InstrumentMaster.from_payload(payload, fetched_on=clock.now().astimezone(UTC).date())
+    if len(master.rows) < MIN_PLAUSIBLE_SCRIP_ROWS:
+        raise ScripMasterError(
+            f"the scrip master decoded to {len(master.rows):,} rows, below the "
+            f"{MIN_PLAUSIBLE_SCRIP_ROWS:,} floor. NSE cash and F&O together are "
+            "six figures, so this is a truncated download. Accepting it would "
+            "subscribe the feed to a handful of tokens - or none - and a silent "
+            "feed reads as a closed market."
+        )
+    return master
+
+
+def load_scrip_master(
+    clock: Clock,
+    *,
+    path: Path = SCRIP_MASTER_CACHE,
+    getter: Callable[[str], bytes] | None = None,
+    url: str = SCRIP_MASTER_URL,
+    refresh: bool = False,
+) -> InstrumentMaster:
+    """Today's scrip master: the cache when it is today's, otherwise downloaded.
+
+    The freshness rule is a correctness rule, not a cache policy. Angel
+    republishes this file daily and an option's token belongs to one expiry, so
+    a master from before a roll maps a live symbol to a token that now trades a
+    different contract - and :meth:`InstrumentMaster.resolve` cannot tell,
+    because the row it finds looks entirely well formed.
+
+    The date is taken in UTC, matching :func:`login`. Between midnight and 05:30
+    IST that lags the exchange day by one, which costs an extra download and
+    never returns a stale master; the opposite bias would.
+    """
+    today = clock.now().astimezone(UTC).date()
+    if not refresh:
+        cached = InstrumentMaster.load(path)
+        if cached is not None and cached.fetched_on == today:
+            log.info("reusing today's angel scrip master", fields={"rows": len(cached.rows)})
+            return cached
+    master = fetch_scrip_master(clock, getter=getter, url=url)
+    master.save(path)
+    log.info("angel scrip master downloaded", fields={"rows": len(master.rows)})
+    return master
 
 
 def _as_float(raw: Any) -> float | None:
@@ -545,8 +755,8 @@ class AngelOneFeed(MarketFeed):
             )
         try:  # pragma: no cover - requires the vendor package
             from SmartApi.smartWebSocketV2 import SmartWebSocketV2
-        except ImportError:  # pragma: no cover
-            raise AngelAuthError('smartapi-python is missing. pip install -e ".[broker]"') from None
+        except ImportError as exc:  # pragma: no cover
+            raise _vendor_import_error(exc) from None
         return SmartWebSocketV2(  # pragma: no cover
             self._session.jwt_token,
             self._api_key,

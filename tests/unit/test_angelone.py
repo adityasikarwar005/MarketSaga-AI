@@ -13,8 +13,11 @@ Each has a test that fails if the guard is removed.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from itertools import islice
+from pathlib import Path
 
 import pytest
 
@@ -30,8 +33,12 @@ from libs.ms_data.angelone import (
     AngelSession,
     InstrumentMaster,
     PriceScaleError,
+    ScripMasterError,
+    fetch_scrip_master,
+    load_scrip_master,
     login,
     paise_to_rupees,
+    strike_to_rupees,
     tick_from_message,
 )
 
@@ -451,3 +458,210 @@ class TestFeed:
         monkeypatch.setenv(envmod.ENV_VAR, "research")
         with pytest.raises(envmod.EnvironmentError_):
             AngelOneFeed(_session(), "abc123", socket_factory=lambda **_k: _FakeSocket())
+
+
+# --------------------------------------------------------------------------- #
+# The scrip master download
+# --------------------------------------------------------------------------- #
+def _bulk_payload(n: int) -> list[dict[str, str]]:
+    """A master of ``n`` plausible rows, so size checks can be tested by size."""
+    return [
+        {
+            "token": str(100000 + i),
+            "symbol": f"SCRIP{i}",
+            "name": f"SCRIP{i}",
+            "exch_seg": "NSE",
+            "instrumenttype": "",
+            "expiry": "",
+            "strike": "0",
+            "lotsize": "1",
+        }
+        for i in range(n)
+    ]
+
+
+class TestScripMasterDownload:
+    """The master is the token map. Everything the feed subscribes to comes
+    through it, and every failure below produces silence rather than an error."""
+
+    CLOCK = SimClock(datetime(2026, 8, 28, 3, 45, tzinfo=UTC))
+
+    def _getter(self, payload: object, calls: list[str]) -> Callable[[str], bytes]:
+        def get(url: str) -> bytes:
+            calls.append(url)
+            return json.dumps(payload).encode("utf-8")
+
+        return get
+
+    def test_a_truncated_master_raises_rather_than_returning_few_rows(self) -> None:
+        """The null test for this component.
+
+        A short response decodes cleanly, resolves nothing, and subscribes the
+        feed to no tokens. The feed then produces no ticks, which is exactly
+        what a closed market produces. Nothing in the pipeline raises.
+        """
+        with pytest.raises(ScripMasterError, match="truncated"):
+            fetch_scrip_master(self.CLOCK, getter=self._getter(_bulk_payload(50), []))
+
+    def test_an_html_error_page_raises(self) -> None:
+        """Angel serves HTML with a 200 on a bad day. json.loads is the only
+        thing between that and a master of zero instruments."""
+        with pytest.raises(ScripMasterError, match="did not parse as JSON"):
+            fetch_scrip_master(self.CLOCK, getter=lambda _u: b"<html>maintenance</html>")
+
+    def test_a_json_object_instead_of_a_list_raises(self) -> None:
+        with pytest.raises(ScripMasterError, match="not a list"):
+            fetch_scrip_master(self.CLOCK, getter=self._getter({"data": []}, []))
+
+    def test_a_good_master_is_stamped_with_the_injected_clock(self) -> None:
+        m = fetch_scrip_master(self.CLOCK, getter=self._getter(_bulk_payload(20_000), []))
+        assert len(m.rows) == 20_000
+        assert m.fetched_on == date(2026, 8, 28)
+
+    def test_the_cache_round_trips(self, tmp_path: Path) -> None:
+        """save/load must preserve expiry and strike exactly. Re-running the
+        vendor expiry parser over already-normalised output would drop rows."""
+        path = tmp_path / "master.json"
+        InstrumentMaster.from_payload(MASTER, fetched_on=date(2026, 8, 28)).save(path)
+        back = InstrumentMaster.load(path)
+        assert back is not None
+        assert back.fetched_on == date(2026, 8, 28)
+        row = back.resolve("NIFTY28AUG2524000CE", as_of=date(2026, 8, 1))
+        assert row.token == 51002
+        assert row.expiry == date(2026, 8, 28)
+        assert row.strike == pytest.approx(24000.0)
+
+    def test_todays_cache_is_reused_without_a_download(self, tmp_path: Path) -> None:
+        path = tmp_path / "master.json"
+        calls: list[str] = []
+        first = load_scrip_master(
+            self.CLOCK, path=path, getter=self._getter(_bulk_payload(20_000), calls)
+        )
+        second = load_scrip_master(
+            self.CLOCK, path=path, getter=self._getter(_bulk_payload(20_000), calls)
+        )
+        assert len(calls) == 1, "today's master was downloaded twice"
+        assert len(second.rows) == len(first.rows)
+
+    def test_yesterdays_cache_is_refetched(self, tmp_path: Path) -> None:
+        """Not a cache policy - a correctness one.
+
+        Angel republishes daily and an option's token belongs to one expiry, so
+        a master from before a roll maps a live symbol to a token that now
+        trades a different contract. resolve() cannot tell: the row it finds is
+        perfectly well formed.
+        """
+        path = tmp_path / "master.json"
+        stale = InstrumentMaster.from_payload(_bulk_payload(20_000), fetched_on=date(2026, 8, 27))
+        stale.save(path)
+        calls: list[str] = []
+        load_scrip_master(self.CLOCK, path=path, getter=self._getter(_bulk_payload(20_000), calls))
+        assert calls, "a master fetched yesterday was accepted as today's"
+
+    def test_refresh_downloads_even_when_the_cache_is_todays(self, tmp_path: Path) -> None:
+        path = tmp_path / "master.json"
+        calls: list[str] = []
+        load_scrip_master(self.CLOCK, path=path, getter=self._getter(_bulk_payload(20_000), calls))
+        load_scrip_master(
+            self.CLOCK, path=path, getter=self._getter(_bulk_payload(20_000), calls), refresh=True
+        )
+        assert len(calls) == 2
+
+    def test_a_corrupt_cache_is_ignored_rather_than_fatal(self, tmp_path: Path) -> None:
+        """09:14 is the wrong time to crash on a half-written file."""
+        path = tmp_path / "master.json"
+        path.write_text("{not json", encoding="utf-8")
+        assert InstrumentMaster.load(path) is None
+        calls: list[str] = []
+        m = load_scrip_master(
+            self.CLOCK, path=path, getter=self._getter(_bulk_payload(20_000), calls)
+        )
+        assert len(m.rows) == 20_000
+
+    def test_a_missing_cache_is_not_an_error(self, tmp_path: Path) -> None:
+        assert InstrumentMaster.load(tmp_path / "absent.json") is None
+
+
+class TestStrikeScale:
+    """Strike is not in paise across the whole master.
+
+    The first download of the real file raised on a USDINR strike, which is the
+    good outcome: the guard band caught a scale the three-row synthetic fixture
+    could never have shown. CDS publishes strike scaled by ten million.
+    """
+
+    # Real rows from the published master. The symbol carries its own strike,
+    # which is what makes these assertions a closed form rather than a copy of
+    # whatever the code happened to produce.
+    CDS_ROWS = [
+        ("USDINR26O2397.25PE", "972500000.000000", 97.25),
+        ("JPYINR26NOV57.25CE", "572500000.000000", 57.25),
+        ("USDJPY26OCT167PE", "1670000000.000000", 167.0),
+        ("694GS203626OCT103.25CE", "1032500000.000000", 103.25),
+    ]
+
+    @pytest.mark.parametrize(("symbol", "raw", "expected"), CDS_ROWS)
+    def test_cds_strikes_decode_out_of_ten_million(
+        self, symbol: str, raw: str, expected: float
+    ) -> None:
+        m = InstrumentMaster.from_payload(
+            [
+                {
+                    "token": "10013",
+                    "symbol": symbol,
+                    "name": symbol[:6],
+                    "exch_seg": "CDS",
+                    "instrumenttype": "OPTCUR",
+                    "expiry": "23OCT2026",
+                    "strike": raw,
+                    "lotsize": "1000",
+                }
+            ],
+            fetched_on=date(2026, 8, 28),
+        )
+        assert m.rows[0].strike == pytest.approx(expected)
+
+    def test_a_cds_strike_read_as_paise_is_refused(self) -> None:
+        """The failure this guard exists for.
+
+        97.25 read as paise is 9,725,000 - past the plausibility band, so it
+        raises instead of quietly making every currency moneyness five orders
+        of magnitude wrong.
+        """
+        with pytest.raises(PriceScaleError):
+            strike_to_rupees(972_500_000.0, "NFO")
+
+    def test_every_other_segment_stays_in_paise(self) -> None:
+        for seg in ("NFO", "BFO", "MCX", "NCO", "NSE"):
+            assert strike_to_rupees(2_400_000.0, seg) == pytest.approx(24_000.0)
+
+    def test_the_segment_lookup_is_case_insensitive(self) -> None:
+        assert strike_to_rupees(972_500_000.0, "cds") == pytest.approx(97.25)
+
+    def test_an_unknown_segment_falls_back_to_paise(self) -> None:
+        """A new segment must not silently inherit CDS's scale."""
+        assert strike_to_rupees(2_400_000.0, "XYZ") == pytest.approx(24_000.0)
+
+    def test_the_no_strike_sentinel_is_not_a_price(self) -> None:
+        """Equities, futures and underlying rows carry -1, not an empty field.
+
+        24,035 rows of the real master do, and exactly one negative value
+        appears in the whole file - so it is a sentinel. Sent through the scale
+        check it raises PriceScaleError on the most ordinary rows there are.
+        """
+        m = InstrumentMaster.from_payload(
+            [
+                {
+                    "token": "2885",
+                    "symbol": "RELIANCE-EQ",
+                    "name": "RELIANCE",
+                    "exch_seg": "NSE",
+                    "instrumenttype": "",
+                    "expiry": "",
+                    "strike": "-1.000000",
+                    "lotsize": "1",
+                }
+            ],
+            fetched_on=date(2026, 8, 28),
+        )
+        assert m.rows[0].strike == 0.0
