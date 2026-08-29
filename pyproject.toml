@@ -41,6 +41,10 @@ api = [
 broker = [
     # Angel One
     "smartapi-python>=1.4",
+    # smartapi-python imports logzero and does not declare it, so pip will not
+    # bring it in. Without this line the package installs cleanly and every
+    # import of it raises ModuleNotFoundError at the first login attempt.
+    "logzero>=1.7",
     "pyotp>=2.9",          # the daily TOTP; the secret lives in .env, never here
     # Upstox. The V3 feed is protobuf, and the generated module ships in the SDK
     # rather than being built here - vendoring a .proto means a protoc in the
@@ -62,6 +66,10 @@ dev = [
     "mypy>=1.10",
     "types-PyYAML>=6.0",   # mypy needs these to check config.py; CI installs only [dev]
     "pre-commit>=3.7",
+    # pre-commit runs detect-secrets in its own env, but regenerating
+    # .secrets.baseline needs the CLI here. Without a baseline on disk the hook
+    # does not scan - it exits with an argparse error, which reads as noise.
+    "detect-secrets>=1.5",
 ]
 
 [tool.setuptools.packages.find]
