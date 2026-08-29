@@ -456,6 +456,18 @@ sequence numbers**, so `GapDetector` is genuinely blind here rather than
 reporting zero gaps - `AngelOneFeed.gap_detection` returns `False` so that
 distinction is asked for rather than inferred.
 
+A fifth trap was found only when the scrip master was first downloaded for
+real, and it is the reason the download belongs in the repository rather than
+in a notebook: **strike is not in paise across the whole file.** The currency
+and interest-rate segment (`CDS`) scales it by ten million - USDINR's 97.25
+strike arrives as `972500000` - while every other segment uses paise. Read as
+paise it decodes to 9,725,000, and every moneyness and strike distance on that
+segment is wrong by five orders of magnitude. It raised only because the
+plausibility band was already there; the three-row synthetic fixture the parser
+had been tested against could not have shown it. `strike_to_rupees` is now
+segment-aware, and the `-1` no-strike sentinel that 24,035 equity, future and
+underlying rows carry is handled separately from a price.
+
 `libs/ms_data/upstox.py` is the third, and the one to reach for: the Analytics
 Token is valid for a year and is **read-only**, so an unattended recorder needs
 no daily login and physically cannot place an order. That last part is a
@@ -2169,10 +2181,18 @@ modules, **five have ever consumed real market data**:
 | M15 | cross-asset series, real daily bars |
 | M15b | daily bar loader, ten years of real NIFTY bars |
 | M35 | overnight gap forecaster - **the only model** ever measured on real data |
+| M70 | IV surface fitter - run on a real NIFTY chain, and the finding was that daily marks **cannot** support the fit. Consumed real data; not validated on it. |
 
-That is **6%**. Everything else - direction, volatility, ensemble, meta-labeller,
-the IV surface, the Greeks engine, sizing, the risk gate - has run only on
-synthetic data where the answer was known in advance.
+That is **7%**, and the sixth entry is the one that shows why the count is a
+weak measure. M70 has now been pointed at real prices and the result was a
+negative: 36.9% of the marks it was given price a negative butterfly before any
+model touches them, because NSE sets settlement to the close on everything that
+traded and models it on everything that did not. Consuming real data and being
+validated on it are different events, and only the first has happened.
+
+Everything else - direction, volatility, ensemble, meta-labeller, the Greeks
+engine, structures, sizing, the risk gate - has run only on synthetic data where
+the answer was known in advance.
 
 And the one model that has been measured **lost**. On 2,465 real sessions it is
 2.4% worse than a naive baseline that regresses on a single variable. (An earlier
@@ -2186,7 +2206,10 @@ real option chains within reach without a broker account, which moves roughly
 been"** - the whole L6 projection layer, the L7 decision layer, M54, M55, M59.
 Reachable is not validated, and this document should never let the two be read
 as the same thing. The count of modules that have actually been pointed at real
-data is still five.
+data is six, and M70's turn produced a negative result rather than a validation.
+What M70 established is narrower and more useful than a number: the archive
+cannot settle the top of the decision chain at all, and a book-carrying chain
+snapshot from a live feed is the only thing that can.
 
 That is not a criticism of those modules. It is the honest statement of what has
 been *demonstrated* versus what has been *built*, and the two are far apart.
@@ -2248,19 +2271,30 @@ adapter, start the recorder tonight. All of that is done. It is replaced rather
 than appended to, because a stale instruction list is worse than none - somebody
 follows it.*
 
-**1. Point M70's SVI fitter at a real option chain.** Everything else on this
-list is secondary. The bhavcopy loader (M14) makes it possible today with no
-account and no credential. If the surface does not fit arbitrage-free on real
-prices, then M71 Greeks, M72 structures and M75 sizing have all been verified
-only against synthetic data whose answer was known in advance - and that is the
-top four-fifths of the decision chain.
+**1. ~~Point M70's SVI fitter at a real option chain.~~ Done, and the answer is
+that a bhavcopy cannot settle it.** `python jobs/surface_report.py --date
+2026-08-26` now fits the real NIFTY chain, and the finding is in
+`docs/model_audit.md`: NSE sets settlement **to the close** on every contract
+that genuinely traded (100% at volume >= 500) and computes it from its own model
+on every contract that did not. There is no third category, so a bhavcopy cannot
+supply a price the surface fitter is allowed to fit. Measured before any model
+runs, **36.9% of equally-spaced strike triples price a negative butterfly**, and
+27.2% still do at volume >= 500 - adjacent strikes last traded minutes apart
+with the index moving in between.
 
-Use `traded_only=True` (the default). More than half of a real chain never
-trades, and those contracts carry an exchange-computed price that would fit
-beautifully and mean nothing.
+`traded_only=True` remains necessary - it drops the model-derived half - and is
+nowhere near sufficient: the worst triple is a put non-monotonic in strike that
+traded five times all day.
+
+So M71 Greeks, M72 structures and M75 sizing are **still** verified only against
+synthetic data, which is the top four-fifths of the decision chain. Settling it
+needs a chain captured with a book - bid and ask at one instant - which moves
+this to depend on the recorder rather than the archive.
 
 **2. Then M55 and M54 on the same data.** Volatility and quantiles are the two
-models the whole projection layer consumes. Neither has seen a real price.
+models the whole projection layer consumes. Neither has seen a real price. Both
+take underlying series rather than option marks, so the finding above does not
+block them - it is specific to fitting a surface across strikes at one instant.
 
 **3. Get a feed - Upstox, Analytics Token.** Free, one year, read-only, no daily
 login. Read-only is a feature here: the recorder cannot place an order even by
@@ -2268,9 +2302,12 @@ accident, which is a stronger guarantee than `MARKETSAGE_ENV` because it is
 enforced at the venue rather than by this repository. The adapter is written and
 mutation-tested; it needs a token.
 
-**4. Only then, the recorder.** It is still the thing that accumulates what
-cannot be bought later - but see the correction below before treating that as
-urgent.
+**4. The recorder - promoted by item 1.** It was on this list as the thing that
+accumulates what cannot be bought later, with the correction below arguing
+against treating that as urgent. Item 1 changes the argument: a book-carrying
+chain snapshot is now the only route to validating the top of the decision
+chain, and the archive cannot substitute for it. The urgency is no longer about
+losing history; it is that four modules stay unverified until this runs.
 
 ---
 

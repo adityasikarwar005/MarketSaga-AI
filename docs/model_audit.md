@@ -1443,3 +1443,249 @@ Two hits from the same rule in one session is worth noting rather than
 brushing past. The rule is not fussy — it is load-bearing in a project whose
 entire correctness story is point-in-time, and I keep reaching for the wall
 clock because it is what one reaches for.
+
+## The scrip master had never been downloaded
+
+`InstrumentMaster` could parse a payload and save one, and had no way to fetch
+one. Every test ran against a three-row synthetic fixture. That is not an
+oversight in the parser — it is the thing this document keeps recording: the
+component had a green test suite because the test supplied data shaped the way
+the parser expected.
+
+The first real download raised on row one:
+
+```
+PriceScaleError: 972500000.0 decodes to 9,725,000.00, which is not a
+plausible price on these exchanges (0.01 to 1,000,000).
+```
+
+**Strike is not in paise across the whole file.** The currency and
+interest-rate segment (`CDS`) publishes it scaled by ten million; NFO, BFO, MCX
+and NCO use paise. `USDINR26O2397.25PE` — strike 97.25 — arrives as
+`972500000`.
+
+Two things are worth separating here.
+
+**Why it was invisible.** Nothing in the pipeline would have raised. A currency
+strike of 9,725,000 is a number; moneyness computed from it is a number; an SVI
+fit over those strikes converges. The failure would have surfaced as a
+volatility surface for the CDS segment that was simply wrong, months later,
+with no error anywhere — the same shape as the theta sign error and the inert
+regularisation constant. The only reason it stopped at the boundary is that
+`MAX_PLAUSIBLE_RUPEES` was already there, guarding a *different* mistake.
+
+**How the scale was established.** Not by picking the divisor that made the
+numbers look right — that is the anti-pattern this whole layer exists to
+prevent. Angel's option symbols carry their own strike, so the file checks
+itself: split each symbol on the expiry taken from that row's own `expiry`
+field, and compare the tail against the `strike` field. That gives 9,290 CDS
+rows at 1e7 with no exceptions, and NFO, BFO, MCX and NCO uniformly at 1e2.
+The remaining rows are ones where the symbol's expiry encoding is ambiguous
+(`ASIANPAINT26NOV2620PE` splits two ways), not ones that disagree.
+
+Why CDS is 1e7 is not documented anywhere I could find, so the constant records
+it as measured rather than explaining it.
+
+**The second finding, from the same download.** `strike` is `-1` for anything
+that does not have one — equities, futures, the underlying rows — 24,035 of
+them, and `-1.000000` is the *only* negative value in the file. Sent through
+the scale check it raises on the most ordinary rows there are. A sentinel is
+not a price and now has its own path.
+
+**What the download's own guard is for.** A truncated response or an HTML
+maintenance page served with a 200 parses to zero rows without raising. The
+feed would then subscribe to no tokens and go quiet, which is indistinguishable
+from a closed market. `MIN_PLAUSIBLE_SCRIP_ROWS` refuses it at the boundary.
+
+The master is also refetched when it is not today's. That is a correctness rule
+rather than a cache policy: Angel republishes daily, an option's token belongs
+to one expiry, and a master from before a roll resolves a live symbol to a
+token that now trades something else. `resolve()` cannot tell — the row it
+finds is perfectly well formed.
+
+## M70 on a real chain: the data cannot support the fit
+
+Section 7 said to point the SVI fitter at a real option chain, and that the
+bhavcopy loader made it possible with no account and no credential. The fitter
+ran. The answer is that the question cannot be settled this way, and the reason
+is worth recording in full because I asserted the opposite in a docstring first
+and the data disproved it.
+
+**What I claimed.** `iv_from_quote` reads `quote.mid` and has no LTP path, for a
+good reason: an LTP is a print from whenever the last trade happened, so a
+surface built from LTPs is built from prices that were never simultaneously
+available. A bhavcopy has no book at all. I added a `PriceBasis.SETTLEMENT` path
+and argued it escaped that objection — a settlement price is the exchange's
+official mark, struck for every contract as of one close, so simultaneity holds
+by construction.
+
+**What the data says.** On the NIFTY chain for 2026-08-26:
+
+| | settlement == close |
+|---|---|
+| volume >= 500 | **100%** (423/423) |
+| volume >= 100 | 99.6% |
+| volume == 0 | **0%** (0/857) |
+
+NSE sets settlement **to the close** on anything that genuinely traded, and
+computes it from its own model on anything that did not. There is no third
+category. So every row a fit may legitimately keep carries the last traded
+price — the banned path exactly — and every row carrying a true exchange mark is
+one whose price the exchange modelled. The claim was wrong, and it was wrong in
+the direction that would have let the work proceed.
+
+**The cost, measured before any model runs.** `negative_butterflies` checks
+convexity in strike on the raw marks: **202 of 547 equally-spaced triples price
+a negative butterfly (36.9%)**. Filtering harder barely moves it — 27.2% at
+volume >= 500 — because the problem is not thin contracts, it is that adjacent
+strikes last traded at different minutes with the index moving in between:
+
+```
+2026-09-01 CE 23600/23650/23700 -> 752.20/710.75/642.75   volume 700/513/2,292
+```
+
+That is not a smile with noise on it. Those three prices never existed together.
+
+**The worst case is worse than non-convex.** `2026-10-27 PE 24800/24850/24900`
+settles at `485.30/850.84/551.70` — not monotonic in strike, which a put price
+must be. The middle contract traded five times all day; its neighbours traded
+349 and 76. It passed `traded_only=True` because volume was not zero.
+`traded_only` excludes the model-derived half and is necessary; the numbers
+above are what "necessary and nowhere near sufficient" looks like.
+
+**What this does and does not mean.**
+
+- It is *not* a finding about the fitter. The fit inherits the arbitrage in its
+  inputs. `require_arbitrage_free()` refuses the result, which is correct
+  behaviour, and blaming the optimiser for it would be the wrong lesson.
+- The fitted surface does admit butterfly violations inside the traded strike
+  range — 12 grid points across 3 of 10 expiries. But of 820 *calendar*
+  violations, only 18 fall inside the range where quotes actually exist: the
+  arbitrage grid is hardcoded to k in [-1.5, 1.5], which is 0.22x to 4.5x the
+  forward, while real traded strikes span roughly [-0.10, +0.11]. Reporting
+  those 820 as a verdict on the fit would be reporting on extrapolation.
+- So M71 Greeks, M72 structures and M75 sizing remain verified only against
+  synthetic data. That was the thing this exercise was meant to change, and it
+  did not change.
+
+**What would settle it** is a chain captured with a book — bid and ask, at one
+instant. That needs a live feed, which is what the recorder is for. The daily
+archive can do many things; it cannot do this one, and the eight years of free
+history that made M14 worth building do not help here.
+
+`PriceBasis.SETTLEMENT` is kept, with its docstring corrected to say all of the
+above, because the measurement is worth being able to reproduce. It is for
+measuring what daily marks can support, not for producing a surface anything
+downstream should consume.
+
+## Every log line claimed UTC and carried IST
+
+Found while checking something else: the Angel session cache recorded
+`issued_on: 2026-08-29` while the log line written by the same call said
+`2026-08-30T01:07:45Z`. One of them was wrong. The session was right.
+
+```
+real UTC now : 2026-08-29T19:38:52.327742+00:00
+log says     : 2026-08-30T01:08:52.327Z
+```
+
+Exactly +5:30. `JsonFormatter` builds `ts` from
+`logging.Formatter.formatTime(...) + "Z"`, and `formatTime` uses
+`time.localtime` unless `converter` is set. It was never set. So the formatter
+rendered local time and appended a character asserting it was UTC.
+
+**Why it was invisible.** Three reasons, and the third is the one worth
+remembering.
+
+1. A log timestamp is not checked against anything. Nothing downstream parses
+   it, so nothing could disagree with it.
+2. It is self-consistent. Every line is wrong by the same amount, so ordering,
+   durations and latencies between lines are all correct. Only an absolute
+   comparison against a second clock reveals it — which is exactly what happened
+   here, by accident.
+3. **CI cannot reproduce it.** GitHub Actions runs with `TZ=UTC`, where
+   `localtime` and `gmtime` are the same function. The bug is not merely
+   untested there; it is *unobservable* there. A test asserting the rendered
+   output would pass on CI whether the fix existed or not.
+
+Point 3 dictated the test. `test_the_converter_is_gmtime` asserts the
+*mechanism* — `JsonFormatter.converter is time.gmtime` — because that is the
+only form that fails on the machine where the fault is invisible. A companion
+test proves `formatTime` actually routes through `converter`, so the pin stays
+load-bearing rather than decorative.
+
+**The consequence that would have been worst.** 20:00 IST on the 29th is 14:30
+UTC on the 29th; the old code wrote `2026-08-30`. Everything logged after 18:30
+IST carried the next day's date, so a single trading day's logs split across two
+dates. Anything correlating a decision record against its log line — which is
+the audit story — would have found the evening's entries filed under tomorrow.
+
+This is not a breach of any of the ten rules, which is part of why it lasted.
+**R6** ("the clock is injected - no `datetime.now()` in library code") is the one
+that should have been near it, and its scanner had nothing to see: `obs.py`
+never calls `datetime.now`, it hands the problem to `logging` and inherits a
+default. The failure is the same *class* as the naive-time convention enforced
+in `ms_ops/rhythm.py` - "a `TypeError` on a good day and a 5.5-hour error on a
+bad one" - arriving in the logs instead of the schedule, and as a wrong label
+rather than a wrong type, so nothing could raise.
+
+## The secret scanner had never run
+
+`megaplan.md` gives M00 the verify `pre-commit run --all-files # exits 0`, and
+`.pre-commit-config.yaml` opens by naming the hook that matters:
+
+> The secret scanner is the one that matters. A broker API key committed once is
+> a key that must be rotated, and if it reaches a public remote it is a key that
+> is already being used by someone else.
+
+It was the one hook that did not work. The config passes
+`--baseline .secrets.baseline`, and that file did not exist, so every invocation
+died in argparse:
+
+```
+detect-secrets-hook.EXE: error: argument --baseline: Invalid path: .secrets.baseline
+```
+
+**Why it was invisible.** The failure is loud and looks like configuration
+noise rather than an unprotected repository. It scrolls past in a wall of hook
+output, it says nothing about secrets, and the exit code is lost to whatever ran
+`pre-commit` last. And nothing downstream depends on the scanner having run, so
+there was no second signal - the same shape as the log timestamp above: wrong,
+self-consistent, and unreferenced.
+
+The timing is the part worth recording. This was found on the day live Angel One
+credentials - a client code, a login PIN and a TOTP secret - were first put in
+`.env`. `.env` is gitignored and `jobs/deploy_space.py` independently refuses to
+read a token from it unless git genuinely cannot see the file, so nothing leaked.
+But the guard specifically built for that hazard had been inert the whole time.
+
+**Fixed, and then proved rather than assumed.** A scanner that runs and finds
+nothing is indistinguishable from a scanner that does not run, so the fix is not
+finished when the hook reports Passed:
+
+```
+repo as it stands ............ Passed
+with a planted AWS key ....... Failed - Secret Type: Secret Keyword
+```
+
+The baseline stores `hashed_secret` only, never a value, so committing it does
+not itself leak anything.
+
+**And the baseline was only half the problem.** `.git/hooks/pre-commit` does not
+exist - `pre-commit install` was never run in this clone. So even with a working
+baseline, none of these hooks fire on `git commit`: not the secret scanner, not
+`detect-private-key`, not `no-commit-to-branch`. They run only when somebody
+invokes `pre-commit` by hand, which is how a repository ends up with a
+carefully written hook config and no hooks. Installing them is a change to how
+every future commit in this clone behaves - including blocking commits to `main`,
+which is where this project's entire history sits - so it is left to the owner
+rather than done quietly. Until then the scanner is armed but not wired.
+
+**Still open, and deliberately not fixed here.** `risk-limits-need-adr` fails
+too, and for a real reason: `docs/decisions/` contains a README and no ADRs at
+all. The hook does not check whether an ADR covers the change - it checks
+whether any ADR exists - so it blocks the first risk-limit change and every one
+after it identically. That is a question about risk governance rather than about
+tooling, and weakening it quietly is exactly the wrong move; it is written down
+here instead. As it stands `pre-commit run --all-files` cannot exit 0, so M00's
+verify block does not pass.
