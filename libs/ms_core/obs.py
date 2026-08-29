@@ -76,7 +76,24 @@ def stage(name: str) -> Iterator[None]:
 # Structured logging
 # --------------------------------------------------------------------------- #
 class JsonFormatter(logging.Formatter):
-    """One JSON object per line, with trace context attached automatically."""
+    """One JSON object per line, with trace context attached automatically.
+
+    ``converter`` is set explicitly. :meth:`logging.Formatter.formatTime`
+    defaults to ``time.localtime``, and the ``ts`` below appends a ``Z`` - so
+    the default renders local time and asserts it is UTC. On an IST machine
+    every line in this repository was stamped 5.5 hours ahead of the instant it
+    described, crossing the date boundary for anything logged after 18:30 UTC.
+
+    It survived because it is invisible where it is usually looked for: CI runs
+    with TZ=UTC, where localtime and gmtime agree and the bug cannot reproduce.
+    R6 keeps `datetime.now` out of library code and had nothing to catch here -
+    this module never calls a clock, it inherits a default from `logging`.
+    """
+
+    # staticmethod so mypy resolves the overload against the base class's
+    # Callable[[float | None], struct_time]; `JsonFormatter.converter` still
+    # reads back as time.gmtime itself, which is what the test pins.
+    converter = staticmethod(time.gmtime)
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
