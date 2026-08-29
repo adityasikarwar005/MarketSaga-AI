@@ -1689,3 +1689,38 @@ after it identically. That is a question about risk governance rather than about
 tooling, and weakening it quietly is exactly the wrong move; it is written down
 here instead. As it stands `pre-commit run --all-files` cannot exit 0, so M00's
 verify block does not pass.
+
+## `pre-commit run --all-files` leaves the tree failing `tasks.py lint`
+
+Running M00's verify command modified sixteen files that had nothing to do with
+the change in hand, and left the repository unable to pass its own lint. Two
+separate causes, both version or tool skew between the hooks and the venv.
+
+**`ruff-format` is in the hook config, and the project's formatter is black.**
+`CLAUDE.md` says so plainly - "the formatter is black, not `ruff format` - they
+disagree, and `lint` checks black" - and `.pre-commit-config.yaml` runs
+`ruff-format` anyway, pinned at v0.5.7. That ruff predates PEP 695 support and
+rewrites a generic signature into something no formatter in this repo wants:
+
+```
+-def flatten_all[P: Closeable](
++def flatten_all[
++    P: Closeable
++](
+```
+
+**The two blacks are different blacks.** pre-commit pins `black` 24.8.0; the
+venv has 26.5.1, and `tasks.py lint` checks with the venv's. They format
+keyword-argument calls differently, so a file formatted by the hook fails the
+lint that CI runs, and a file formatted by `tasks.py fmt` would fail the hook.
+Whichever one ran last wins, and the loser is whoever runs the other next.
+
+Nothing here is subtle once seen; what makes it worth writing down is that the
+verify command for M00 is the thing that causes it. Running the check leaves the
+repository in a state the check's sibling rejects, and the sixteen touched files
+look like real edits in `git status` - they were nearly committed alongside
+genuine work, which is the actual hazard.
+
+Reverted rather than committed. The hook config needs `ruff-format` dropped and
+`black` pinned to the version `tasks.py` uses, but changing what formats every
+file in the repository is not something to slip into an unrelated branch.

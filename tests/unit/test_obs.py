@@ -17,8 +17,13 @@ from libs.ms_core.obs import JsonFormatter
 
 def _record(created: float) -> logging.LogRecord:
     rec = logging.LogRecord(
-        name="probe", level=logging.INFO, pathname=__file__, lineno=1,
-        msg="hello", args=(), exc_info=None,
+        name="probe",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="hello",
+        args=(),
+        exc_info=None,
     )
     rec.created = created
     rec.msecs = (created - int(created)) * 1000.0
