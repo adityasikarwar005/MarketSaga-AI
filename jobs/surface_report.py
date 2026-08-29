@@ -26,15 +26,25 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from libs.ms_core import config as cfgmod
+from libs.ms_core.clock import SessionCalendar
 from libs.ms_core.obs import configure
 from libs.ms_core.schemas import ChainSnapshot, OptionQuote, OptionType
+from libs.ms_data.bhavcopy import (
+    BhavcopyStore,
+    ConvexityCheck,
+    chain_from_records,
+    negative_butterflies,
+)
+from libs.ms_data.holidays import HolidayStore
 from libs.ms_options.pricing import OptType, black76_price
-from libs.ms_options.surface import Surface, SVIParams, fit_surface
+from libs.ms_options.surface import PriceBasis, Surface, SVIParams, fit_surface
 
 ROOT = Path(__file__).resolve().parents[1]
 CHAIN_DIR = ROOT / "data" / "raw"
@@ -98,15 +108,94 @@ def demo_chain(ts: datetime) -> ChainSnapshot:
     return ChainSnapshot(ts=ts, underlying_id=1, spot=DEMO_SPOT, quotes=quotes)
 
 
-def load_chain(day: date) -> ChainSnapshot:
-    raise SystemExit(
-        f"No recorded chain for {day}. Chain capture lands with the recorder "
-        f"(look in {CHAIN_DIR.relative_to(ROOT)}), and nothing has been recorded "
-        "on real option data yet.\n\n"
-        "Run `python jobs/surface_report.py --demo` to exercise the fitter on a "
-        "synthetic chain with a known smile. Be clear when reporting which one "
-        "produced a number: only the overnight gap forecaster has ever run on "
-        "real market data."
+@dataclass(frozen=True)
+class Provenance:
+    """Where the chain came from, in the numbers a reader needs to judge it."""
+
+    symbol: str
+    day: date
+    listed: int
+    traded: int
+    dropped_untraded: int
+    convexity: ConvexityCheck
+    settles_at_close: int
+
+    def render(self) -> list[str]:
+        pct = self.dropped_untraded / self.listed if self.listed else 0.0
+        at_close = self.settles_at_close / self.traded if self.traded else 0.0
+        return [
+            f"  REAL chain: {self.symbol} F&O bhavcopy for {self.day}.",
+            f"    {self.listed:,} contracts listed, {self.traded:,} traded, "
+            f"{self.dropped_untraded:,} dropped for never trading ({pct:.0%}).",
+            "",
+            "  READ THIS BEFORE THE NUMBERS BELOW.",
+            "    A bhavcopy carries no book, so this is fitted on SETTLEMENT",
+            f"    prices - and on {at_close:.0%} of the contracts kept here, NSE set",
+            "    settlement TO THE CLOSE, which is the last traded price. That is",
+            "    the path the mid rule exists to forbid. On contracts that did not",
+            "    trade, settlement is NSE's own model output instead, which is why",
+            "    they are dropped. There is no third kind of row.",
+            "",
+            "    The cost is measurable in the marks themselves, before fitting:",
+            *self.convexity.render(),
+            "    Those prices were never simultaneously available, so a surface",
+            "    fitted on them inherits the arbitrage in its inputs. Treat what",
+            "    follows as a measurement of daily marks, NOT as a surface any",
+            "    consumer should price against.",
+        ]
+
+
+def load_chain(day: date, *, symbol: str = "NIFTY") -> tuple[ChainSnapshot, Provenance]:
+    """One session's real option chain, from the NSE F&O bhavcopy.
+
+    ``traded_only`` is not optional here and is deliberately not a flag. More
+    than half of a listed chain never trades, and every one of those contracts
+    still carries a settlement price NSE computed from its own model. Fitting
+    SVI to those points fits the exchange's model, converges beautifully, and
+    reports a smile that nothing traded at.
+    """
+    cfg = cfgmod.load(warn=False)
+    cal = SessionCalendar.from_config(cfg.sessions).with_holidays(HolidayStore().as_calendar_dict())
+    dayfile = BhavcopyStore(calendar=cal).get(day)
+
+    listed = sum(1 for r in dayfile.records if r.symbol == symbol)
+    if not listed:
+        present = sorted({r.symbol for r in dayfile.records})[:12]
+        raise SystemExit(
+            f"  no contracts named {symbol!r} in the {day} bhavcopy. "
+            f"Present, first twelve: {', '.join(present)}"
+        )
+
+    records, dropped = dayfile.options(symbol, traded_only=True)
+    if not records:
+        raise SystemExit(f"  {listed} {symbol} contracts listed on {day}, none traded.")
+
+    ids = {i.symbol: i.id for i in cfg.instruments.instruments}
+    if symbol not in ids:
+        raise SystemExit(
+            f"  {symbol!r} has no id in config/instruments.yaml. An id invented "
+            "here would attribute this chain to an instrument that does not exist."
+        )
+
+    # The chain is a photograph of the close, which is what settlement marks.
+    # available_at() answers a different question - when a replay may release
+    # the file - and using it here would put every time-to-expiry a day short.
+    _, session_end = cal.session_bounds(day)
+
+    chain = chain_from_records(
+        records,
+        underlying_id=ids[symbol],
+        ts=session_end,
+        price_field="settlement",
+    )
+    return chain, Provenance(
+        symbol=symbol,
+        day=day,
+        listed=listed,
+        traded=len(records),
+        dropped_untraded=dropped,
+        convexity=negative_butterflies(records),
+        settles_at_close=sum(1 for r in records if r.close == r.settlement),
     )
 
 
@@ -160,22 +249,29 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--date", type=date.fromisoformat, help="the recorded day to fit")
     parser.add_argument("--demo", action="store_true", help="fit a synthetic chain instead")
+    parser.add_argument("--symbol", default="NIFTY", help="underlying to fit (default NIFTY)")
     parser.add_argument("--strict", action="store_true", help="exit non-zero if arbitrage is found")
     args = parser.parse_args(argv)
 
     configure()
 
+    print()
     if args.demo:
         now = datetime(2026, 8, 27, 6, 0, tzinfo=UTC)
         chain = demo_chain(now)
+        basis = PriceBasis.MID
         print("  SYNTHETIC chain with a known smile - not real market data.")
     elif args.date:
         now = datetime.combine(args.date, datetime.min.time(), tzinfo=UTC)
-        chain = load_chain(args.date)
+        chain, prov = load_chain(args.date, symbol=args.symbol)
+        basis = PriceBasis.SETTLEMENT
+        for line in prov.render():
+            print(line)
     else:
         parser.error("give --date <YYYY-MM-DD> or --demo")
 
-    surface = fit_surface(chain, now=chain.ts)
+    print()
+    surface = fit_surface(chain, now=chain.ts, basis=basis)
     print(report(surface, now=now))
 
     if args.strict and not surface.arbitrage_report().clean:

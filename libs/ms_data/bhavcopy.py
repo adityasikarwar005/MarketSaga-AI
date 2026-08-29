@@ -513,6 +513,80 @@ class BhavcopyStore:
 # --------------------------------------------------------------------------- #
 # Chains
 # --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class ConvexityCheck:
+    """How much of a day's marks price a negative butterfly.
+
+    A call (or put) price must be convex in strike: for three equally spaced
+    strikes, ``C(K1) - 2*C(K2) + C(K3) >= 0``. Where it is not, the butterfly
+    spread built from those three contracts has negative cost and unbounded
+    payoff - so the three prices cannot all have been available at once.
+
+    This is a measurement of the *data*, taken before any model touches it, and
+    it is the number that says whether a surface fitted on these marks can mean
+    anything. Fitting first and reading the fit's arbitrage report instead
+    conflates two questions: whether the fitter works, and whether its inputs
+    were mutually consistent to begin with.
+    """
+
+    triples: int
+    violations: int
+    worst: float
+    worst_detail: str
+
+    @property
+    def rate(self) -> float:
+        return self.violations / self.triples if self.triples else 0.0
+
+    def render(self) -> list[str]:
+        if not self.triples:
+            return ["    no equally-spaced strike triples to check"]
+        return [
+            f"    {self.violations:,} of {self.triples:,} equally-spaced strike "
+            f"triples price a NEGATIVE butterfly ({self.rate:.1%}).",
+            f"    worst {self.worst:.2f}: {self.worst_detail}",
+        ]
+
+
+def negative_butterflies(
+    records: Sequence[OptionRecord], *, price_field: str = "settlement"
+) -> ConvexityCheck:
+    """Convexity in strike, per expiry and option type, on the raw marks.
+
+    Only equally spaced triples are tested. NIFTY lists 50-point strikes near
+    the money and 100-point strikes in the wings, and a triple that straddles
+    the change is not required to be convex by this inequality - counting it
+    would manufacture violations that are an artefact of the strike ladder.
+    """
+    if price_field not in ("settlement", "close"):
+        raise ValueError(f"price_field must be 'settlement' or 'close', not {price_field!r}")
+
+    groups: dict[tuple[date, OptionType], list[tuple[float, float]]] = {}
+    for r in records:
+        px = r.settlement if price_field == "settlement" else r.close
+        groups.setdefault((r.expiry, r.opt_type), []).append((r.strike, px))
+
+    triples = violations = 0
+    worst = 0.0
+    detail = "none"
+    for (expiry, opt_type), rows in groups.items():
+        rows.sort()
+        for (k1, c1), (k2, c2), (k3, c3) in zip(rows, rows[1:], rows[2:], strict=False):
+            if abs((k2 - k1) - (k3 - k2)) > 1e-6:
+                continue
+            triples += 1
+            butterfly = c1 - 2.0 * c2 + c3
+            if butterfly < -1e-9:
+                violations += 1
+                if butterfly < worst:
+                    worst = butterfly
+                    detail = (
+                        f"{expiry} {opt_type} {k1:.0f}/{k2:.0f}/{k3:.0f} "
+                        f"settling {c1:.2f}/{c2:.2f}/{c3:.2f}"
+                    )
+    return ConvexityCheck(triples=triples, violations=violations, worst=worst, worst_detail=detail)
+
+
 def chain_from_records(
     records: Sequence[OptionRecord],
     *,

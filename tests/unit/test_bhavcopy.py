@@ -29,6 +29,7 @@ from libs.ms_data.bhavcopy import (
     available_at,
     chain_from_records,
     formats_for,
+    negative_butterflies,
     parse,
     parse_legacy,
     parse_udiff,
@@ -88,7 +89,7 @@ class TestUntradedContracts:
         by the exchange, neither paid by anybody, and 182% apart.
         """
         rows = parse_udiff(UDIFF_CSV)
-        (far,) = [r for r in rows if r.strike == 31000.0]
+        (far,) = (r for r in rows if r.strike == 31000.0)
         assert far.volume == 0
         assert not far.traded
         assert far.close == 2.40 and far.settlement == 0.85
@@ -393,3 +394,94 @@ class TestChain:
     def test_an_empty_chain_is_refused(self) -> None:
         with pytest.raises(ValueError, match="zero records"):
             chain_from_records([], underlying_id=26000, ts=datetime(2026, 8, 26, tzinfo=UTC))
+
+
+# --------------------------------------------------------------------------- #
+# Convexity of the raw marks
+# --------------------------------------------------------------------------- #
+def _opt(strike: float, settlement: float, *, opt_type: OptionType = OptionType.CE) -> OptionRecord:
+    return OptionRecord(
+        day=date(2026, 8, 26),
+        symbol="NIFTY",
+        expiry=date(2026, 10, 27),
+        strike=strike,
+        opt_type=opt_type,
+        close=settlement,
+        settlement=settlement,
+        volume=1_000,
+        open_interest=10_000,
+        oi_change=0,
+    )
+
+
+class TestNegativeButterflies:
+    """Whether the marks are mutually consistent, asked before any model runs.
+
+    Fitting first and reading the fit's arbitrage report answers a different
+    question. A surface can only be as arbitrage-free as its inputs, and if the
+    inputs are not, the fitter gets blamed for the data.
+    """
+
+    def test_a_convex_ladder_has_no_violations(self) -> None:
+        # Strictly convex: differences -80, -60, so the second difference is +20.
+        recs = [_opt(24000, 300.0), _opt(24100, 220.0), _opt(24200, 160.0)]
+        check = negative_butterflies(recs)
+        assert check.triples == 1
+        assert check.violations == 0
+
+    def test_a_concave_triple_is_caught(self) -> None:
+        recs = [_opt(24000, 300.0), _opt(24100, 260.0), _opt(24200, 160.0)]
+        check = negative_butterflies(recs)
+        assert check.violations == 1
+        assert check.worst == pytest.approx(-60.0)
+        assert "24000/24100/24200" in check.worst_detail
+
+    def test_unequal_spacing_is_skipped_not_counted(self) -> None:
+        """NIFTY lists 50-point strikes near the money and 100-point strikes in
+        the wings. A triple straddling the change is not required to be convex
+        by this inequality, and counting it manufactures violations that are an
+        artefact of the strike ladder rather than of the prices."""
+        recs = [_opt(24000, 300.0), _opt(24050, 260.0), _opt(24150, 160.0)]
+        assert negative_butterflies(recs).triples == 0
+
+    def test_calls_and_puts_are_not_mixed(self) -> None:
+        """Convexity holds within one option type. Interleaving the two ladders
+        compares prices that have no reason to sit on one curve."""
+        recs = [
+            _opt(24000, 300.0),
+            _opt(24100, 220.0),
+            _opt(24200, 160.0),
+            _opt(24000, 100.0, opt_type=OptionType.PE),
+            _opt(24100, 140.0, opt_type=OptionType.PE),
+            _opt(24200, 200.0, opt_type=OptionType.PE),
+        ]
+        check = negative_butterflies(recs)
+        assert check.triples == 2, "one triple per option type, not one over the merge"
+        assert check.violations == 0
+
+    def test_the_real_worst_case_from_2026_08_26(self) -> None:
+        """Pinned from the published NIFTY chain, not constructed.
+
+        24850 PE settles at 850.84 between neighbours at 485.30 and 551.70 -
+        not merely non-convex, not even monotonic in strike, which a put price
+        must be. It traded five times all day; its neighbours traded 349 and 76.
+        This is what `traded_only=True` lets through, and why volume > 0 is a
+        necessary and badly insufficient filter.
+        """
+        recs = [
+            _opt(24800, 485.30, opt_type=OptionType.PE),
+            _opt(24850, 850.84, opt_type=OptionType.PE),
+            _opt(24900, 551.70, opt_type=OptionType.PE),
+        ]
+        check = negative_butterflies(recs)
+        assert check.violations == 1
+        assert check.worst == pytest.approx(485.30 - 2 * 850.84 + 551.70)
+
+    def test_price_field_must_be_named(self) -> None:
+        with pytest.raises(ValueError, match="price_field"):
+            negative_butterflies([_opt(24000, 300.0)], price_field="ltp")
+
+    def test_an_empty_chain_reports_no_rate_rather_than_dividing_by_zero(self) -> None:
+        check = negative_butterflies([])
+        assert check.triples == 0
+        assert check.rate == 0.0

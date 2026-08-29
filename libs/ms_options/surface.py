@@ -80,8 +80,69 @@ MAX_SURFACE_AGE = timedelta(seconds=90)
 MIN_QUOTES_PER_EXPIRY = 8
 
 
+class PriceBasis(StrEnum):
+    """What kind of price a surface was fitted on.
+
+    ``MID`` is the rule and the default: a two-sided book, both legs quoted at
+    the same instant. Nothing in "Mid, never last-traded" above is relaxed.
+
+    ``SETTLEMENT`` exists to fit the NSE F&O bhavcopy, which is the only real
+    option data reachable without a broker account. **It does not escape the
+    LTP objection, and the first attempt to claim it did was wrong.** The claim
+    was that a settlement price is an exchange mark struck for every contract as
+    of one close, so the simultaneity argument does not apply. Measured on the
+    NIFTY chain for 2026-08-26, that is false, and precisely so:
+
+    ======================  ==========================================
+    volume >= 500           100% of contracts have settlement == close
+    volume >= 100           99.6%
+    volume == 0             0%
+    ======================  ==========================================
+
+    NSE sets settlement **to the close** on anything that genuinely traded, and
+    computes it from its own model on anything that did not. There is no third
+    category. So every row a fit could legitimately keep carries the last traded
+    price - the banned path exactly - and every row carrying a true exchange
+    mark is one whose price the exchange modelled.
+
+    The consequence is measurable in the marks themselves, before any fitting:
+    **36.9% of equally-spaced strike triples price a negative butterfly**, and
+    filtering harder does not rescue it (27.2% at volume >= 500). Deep-ITM calls
+    at 23600/23650/23700 settle at 752.20/710.75/642.75 on real volume of
+    700/513/2,292 - each a print from a different minute of the session, with
+    the index moving in between. That is not a smile with noise on it; it is
+    three prices that were never simultaneously available, which is the whole
+    reason the mid rule exists.
+
+    So this basis is for **measuring** what daily marks can and cannot support,
+    not for producing a surface anything downstream should consume. A surface
+    fitted on it inherits the arbitrage in its inputs, and
+    :func:`require_arbitrage_free` will refuse it - correctly.
+
+    ``traded_only=True`` remains a precondition rather than a preference: it
+    excludes the model-derived half. It is necessary and, as the numbers above
+    show, nowhere near sufficient.
+
+    There is also no spread on a settlement mark, so the spread filter cannot
+    run at all - a filter absent rather than a filter passed.
+    """
+
+    MID = "mid"
+    SETTLEMENT = "settlement"
+
+
+def price_for(quote: OptionQuote, basis: PriceBasis) -> float | None:
+    """The price this basis fits on, or ``None`` when the quote cannot supply it."""
+    if basis is PriceBasis.MID:
+        return quote.mid
+    return quote.ltp
+
+
 class RejectReason(StrEnum):
     NO_TWO_SIDED_MARKET = "no_two_sided_market"
+    # Distinct from the one above: on a settlement basis there is no book to be
+    # one-sided, so "no two-sided market" would be the wrong sentence entirely.
+    NO_PRICE = "no_price"
     SPREAD_TOO_WIDE = "spread_too_wide"
     OI_TOO_LOW = "oi_too_low"
     DELTA_OUT_OF_BAND = "delta_out_of_band"
@@ -119,7 +180,12 @@ class ForwardEstimate:
 
 
 def synthetic_forward(
-    quotes: Sequence[OptionQuote], *, spot: float, r: float, t: float
+    quotes: Sequence[OptionQuote],
+    *,
+    spot: float,
+    r: float,
+    t: float,
+    basis: PriceBasis = PriceBasis.MID,
 ) -> ForwardEstimate:
     """The forward the market is using, from put-call parity.
 
@@ -138,11 +204,11 @@ def synthetic_forward(
     """
     by_strike: dict[float, dict[OptType, float]] = {}
     for q in quotes:
-        mid = q.mid
-        if mid is None or mid <= 0:
+        px = price_for(q, basis)
+        if px is None or px <= 0:
             continue
         kind = OptType.CALL if str(q.opt_type).upper().startswith("C") else OptType.PUT
-        by_strike.setdefault(q.strike, {})[kind] = mid
+        by_strike.setdefault(q.strike, {})[kind] = px
 
     both = {k: v for k, v in by_strike.items() if OptType.CALL in v and OptType.PUT in v}
     if not both:
@@ -215,6 +281,7 @@ def iv_from_quote(
     t: float,
     r: float,
     stats: FilterStats,
+    basis: PriceBasis = PriceBasis.MID,
     max_spread_pct: float = MAX_SPREAD_PCT,
     min_oi: int = MIN_OI,
     min_abs_delta: float = MIN_ABS_DELTA,
@@ -230,22 +297,29 @@ def iv_from_quote(
         stats.reject(RejectReason.EXPIRED)
         return None
 
-    mid = quote.mid  # bid > 0 and ask present, or None
-    if mid is None or mid <= 0.0:
-        stats.reject(RejectReason.NO_TWO_SIDED_MARKET)
+    px = price_for(quote, basis)
+    if px is None or px <= 0.0:
+        stats.reject(
+            RejectReason.NO_TWO_SIDED_MARKET if basis is PriceBasis.MID else RejectReason.NO_PRICE
+        )
         return None
 
-    spread = quote.spread_pct_of_mid
-    if spread is None or spread > max_spread_pct:
-        stats.reject(RejectReason.SPREAD_TOO_WIDE)
-        return None
+    # A settlement mark has no spread to measure. The filter is skipped rather
+    # than passed, and the difference matters: what protected the fit from
+    # illiquid strikes on the mid path is simply absent here, and `traded_only`,
+    # the OI floor and the delta band are carrying that load alone.
+    if basis is PriceBasis.MID:
+        spread = quote.spread_pct_of_mid
+        if spread is None or spread > max_spread_pct:
+            stats.reject(RejectReason.SPREAD_TOO_WIDE)
+            return None
 
     if quote.oi is not None and quote.oi < min_oi:
         stats.reject(RejectReason.OI_TOO_LOW)
         return None
 
     kind = OptType.CALL if str(quote.opt_type).upper().startswith("C") else OptType.PUT
-    iv = implied_vol(mid, forward, quote.strike, t, r, kind)
+    iv = implied_vol(px, forward, quote.strike, t, r, kind)
     if iv is None or iv <= 0.0:
         stats.reject(RejectReason.IV_DID_NOT_SOLVE)
         return None
@@ -610,6 +684,10 @@ class Surface:
     spot: float
     slices: dict[datetime, ExpirySlice] = field(default_factory=dict)
     max_age: timedelta = MAX_SURFACE_AGE
+    # Recorded, not inferred. A consumer that cannot tell whether it is holding
+    # a book-implied surface or one fitted on end-of-day exchange marks will
+    # compare the two as though they were the same measurement.
+    basis: PriceBasis = PriceBasis.MID
 
     def age(self, now: datetime) -> timedelta:
         return now - self.ts
@@ -678,7 +756,8 @@ class Surface:
     def render(self) -> str:
         lines = [
             f"  surface for {self.underlying_id} at {self.ts.isoformat()} "
-            f"(spot {self.spot:.2f}, {len(self.slices)} expiries)"
+            f"(spot {self.spot:.2f}, {len(self.slices)} expiries, "
+            f"fitted on {self.basis.value} prices)"
         ]
         for _expiry, sl in sorted(self.slices.items(), key=lambda kv: kv[1].t):
             lines.append(sl.render())
@@ -691,6 +770,7 @@ def fit_surface(
     *,
     now: datetime,
     r: float = 0.065,
+    basis: PriceBasis = PriceBasis.MID,
     max_spread_pct: float = MAX_SPREAD_PCT,
     min_oi: int = MIN_OI,
     max_age: timedelta = MAX_SURFACE_AGE,
@@ -702,7 +782,11 @@ def fit_surface(
     for it would take the monthlies down with it.
     """
     surface = Surface(
-        ts=chain.ts, underlying_id=chain.underlying_id, spot=chain.spot, max_age=max_age
+        ts=chain.ts,
+        underlying_id=chain.underlying_id,
+        spot=chain.spot,
+        max_age=max_age,
+        basis=basis,
     )
 
     by_expiry: dict[datetime, list[OptionQuote]] = {}
@@ -714,7 +798,7 @@ def fit_surface(
         if t <= 0.0:
             continue
 
-        fwd = synthetic_forward(quotes, spot=chain.spot, r=r, t=t)
+        fwd = synthetic_forward(quotes, spot=chain.spot, r=r, t=t, basis=basis)
         stats = FilterStats()
         obs = [
             o
@@ -725,6 +809,7 @@ def fit_surface(
                     t=t,
                     r=r,
                     stats=stats,
+                    basis=basis,
                     max_spread_pct=max_spread_pct,
                     min_oi=min_oi,
                 )
