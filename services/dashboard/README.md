@@ -28,8 +28,9 @@ parameters return to six decimals and the calibrated paths land on the quantile
 heads to five, which means the code computes what it claims to compute. It does
 not mean the system makes money.
 
-**Exactly one component has ever run on real market data**: the overnight gap
-forecaster, on ten years of free daily bars. Measured against a naive baseline
+**Five components have ever consumed real market data, and exactly one *model*
+has been measured on it**: the overnight gap forecaster, on ten years - 2,465
+sessions - of free daily bars. Measured against a naive baseline
 that regresses on a single variable, it is **2.4% worse**. Its direction hit
 rate is 74%, of which 67 points come from the index simply gapping up more often
 than down — the model contributes about seven, and transaction costs consume

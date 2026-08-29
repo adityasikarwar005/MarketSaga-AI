@@ -133,7 +133,7 @@ window.SESSION = {
 
   gates: [
     { id: "G4", state: "fail", name: "Gap forecaster, real daily bars",
-      why: "CRPS 0.002827 against a naive 0.002487 — 13.7% worse. All twelve trials are named in docs/gates.md. This is the only component that has ever run on real market data." },
+      why: "CRPS 0.002421 on 2,465 sessions — 2.4% worse than a naive baseline, where the gate needs 10% better. The best feature subset (k=1) reaches +1.0%. All 21 trials are named in docs/gates.md. An earlier run read −13.7% on 496 sessions; four fifths of that deficit turned out to be sample size rather than specification." },
     { id: "G6", state: "open", name: "Projection scorer",
       why: "Needs CRPS beating every baseline by 8%. An oracle handed the true conditional variance beats a fitted GARCH by 0.19% on GARCH-like data, so the bar is asking for structure the baseline cannot see." },
     { id: "G7", state: "fail", name: "Stress and simulation",
