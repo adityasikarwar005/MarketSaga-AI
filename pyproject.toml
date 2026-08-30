@@ -61,9 +61,20 @@ deploy = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "ruff>=0.5",
-    "black>=24.0",
-    "mypy>=1.10",
+    # Pinned exactly, not floored. A floating lower bound is right for a library
+    # this project imports and wrong for a tool that decides whether the build
+    # passes: CI installs into a clean runner and resolves to whatever shipped
+    # most recently, while a working copy keeps whatever it has. On 2026-08-30
+    # that gap was one patch version of ruff - 0.16.4 locally, 0.16.5 on CI -
+    # and it turned a green `tasks.py verify` into a red pipeline nineteen
+    # seconds later, on a rule that had nothing to do with the change.
+    #
+    # ruff and black also appear in .pre-commit-config.yaml. The three copies
+    # are checked against each other by tests/unit/test_toolchain_pins.py, so
+    # bumping one alone fails rather than drifting.
+    "ruff==0.16.5",
+    "black==26.5.1",
+    "mypy==2.3.1",
     "types-PyYAML>=6.0",   # mypy needs these to check config.py; CI installs only [dev]
     "pre-commit>=3.7",
     # pre-commit runs detect-secrets in its own env, but regenerating

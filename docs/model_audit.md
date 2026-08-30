@@ -2274,3 +2274,40 @@ it does **not** block ordinary commits, because it only fires when the file it
 guards is in the changeset. So `pre-commit run --all-files` still cannot exit 0
 and M00's verify block still does not pass, while day-to-day work is unaffected.
 The distinction was worth establishing rather than assuming.
+
+## Pinning the lint toolchain, and the third copy that pinning creates
+
+`ruff>=0.5`, `black>=24.0` and `mypy>=1.10` are floating lower bounds on tools
+that decide whether the build passes. CI installs `[dev]` into a clean runner
+and resolves to whatever shipped most recently; a working copy keeps whatever it
+installed on the day it was set up. On 2026-08-30 that gap was **one patch
+version of ruff** - 0.16.4 locally, 0.16.5 on CI - and it turned a green
+`tasks.py verify` into a red pipeline nineteen seconds later, on a rule that had
+nothing to do with the change.
+
+Now `ruff==0.16.5`, `black==26.5.1`, `mypy==2.3.1`. That closes the gap between
+CI and the working copy, and opens a new one: ruff and black are also pinned in
+`.pre-commit-config.yaml`, so the same number lives in three places -
+pyproject, the hook config, and whatever is actually installed.
+
+Three copies of a number drift. `tests/unit/test_toolchain_pins.py` asserts they
+agree:
+
+- every gating tool is pinned exactly, not floored
+- the pin matches the installed version, because a pin nobody has installed is
+  a comment
+- the pre-commit rev matches the pyproject pin, because the hook and the lint
+  command have to be the same tool - they were not, and the result was that a
+  file formatted by the hook failed `tasks.py lint` while one formatted by
+  `tasks.py fmt` failed the hook
+- `ruff-format` has not come back alongside black
+
+**Both guards were checked by breaking them.** Setting the pre-commit rev to
+0.16.4 fails the third test; setting the pyproject pin to 0.16.4 fails the
+second, naming the installed version and what to do about it. A guard nobody has
+seen fail is a guard nobody has measured.
+
+**What this does not fix.** Nothing forces an upgrade to be considered. Pinning
+means the toolchain is now deliberately stale until somebody bumps it, and the
+bump is a three-file edit that the tests will insist on completing. That is the
+trade: silent drift replaced by explicit friction.
