@@ -2131,3 +2131,57 @@ deriving quantile-lookup keys by arithmetic raised on every forecast. Levels are
 now matched to the nearest existing key within a tolerance, with a test that
 pins both the proximity match and its refusal to match something genuinely
 absent.
+
+## Mondrian conformal: the regime gap closes, and the marginal number never saw it
+
+The previous entry left one thing open. Global conformal fixes marginal
+coverage and leaves the regime split untouched, because a single multiplier
+moves every tercile together by construction. On real bars at horizon 5 that was
+quiet 98.0%, busy 88.1% - a 9.9-point gap that global conformal left at 9.9.
+
+Mondrian conformal fits one scale per volatility bucket, chosen on the
+calibration block. On the same split, horizon 5:
+
+| | quiet | mid | busy | widest gap | width | pinball |
+|---|---|---|---|---|---|---|
+| raw heads | 98.0% | 91.6% | 88.1% | **9.9%** | 0.06546 | 0.004607 |
+| global | 98.0% | 92.1% | 88.1% | **9.9%** | 0.06600 | 0.004609 |
+| mondrian | 93.6% | 92.6% | 91.1% | **2.5%** | 0.06506 | **0.004592** |
+
+Scales x0.803 / x1.035 / x1.188 - it narrows the quiet bucket and widens the
+busy one, which is the move a single scale cannot make in either direction. And
+it is not bought with width: the mean band is *narrower* than the raw one and the
+pinball loss slightly better. At horizon 1, where the raw gap is only 5.9%, the
+improvement is correspondingly smaller: 5.9% -> 4.5%.
+
+**The synthetic case makes the mechanism unmissable.** On data whose scale
+switches by regime, a global scale lands marginal coverage at 90.8% against a
+nominal 90% - a number that reads as perfectly calibrated - while the quiet
+tercile sits at 100% and the busy one at 81.6%. Both wrong, opposite directions,
+and the average conceals it. Mondrian: 91.2% and 92.2%. That pair is now a test.
+
+**Why this matters for sizing rather than for scoring.** The busy tercile is
+where the tail arrives. A band that is short there is short exactly when being
+short is expensive, and M75 reads the interval width through two channels that
+compound. An over-wide quiet band costs opportunity; a short busy band costs
+money.
+
+**Two corrections to my own output on the way there.**
+
+The verdict logic only looked at marginal coverage, so on the horizon-5 run it
+printed "NOTHING WAS BROKEN ON THIS SPLIT" while the regime gap underneath was
+9.9 points. That is the same mistake the whole entry is about, made by the job
+written to detect it. It now weighs both, and `MAX_REGIME_GAP` says why five
+points is the line.
+
+And the report labelled its own number "quiet-to-busy gap" while computing
+max-minus-min across all three terciles - at horizon 1 the lowest is the middle
+bucket, not the busy one, so the label named a comparison the code was not
+making.
+
+**What is still not addressed.** Bucket edges are fitted on the calibration
+block, so a test row outside that range lands in an end bucket - an
+extrapolation that is flagged but not solved. And three buckets over a 600-row
+calibration block is 200 rows each, which is above the floor and not comfortably
+so. Splitting a calibration set does not create information, and the refusal
+below `MIN_CALIBRATION_ROWS` per bucket is the guard for that.
