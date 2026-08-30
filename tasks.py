@@ -164,6 +164,19 @@ def bhavcopy() -> None:
     run(_py(), "jobs/bhavcopy_backfill.py", *sys.argv[2:], check=False)
 
 
+def angel_history() -> None:
+    """Angel historical candles: cross-check the price scale, or fetch intraday.
+
+    `python tasks.py angel-history --cross-check` compares Angel's own daily
+    series against the ten years of NIFTY bars already on disk from an unrelated
+    provider. That is the only available evidence that this endpoint returns
+    rupees rather than paise - the plausibility band cannot tell 24,180 from
+    241.80, and a consistent 100x survives every downstream check.
+    """
+    _load_dotenv()
+    run(_py(), "jobs/angel_history.py", *sys.argv[2:], check=False)
+
+
 def gates() -> None:
     """Every gate's real state, derived from the repository.
 
@@ -469,6 +482,7 @@ COMMANDS = {
     "restore-drill": restore_drill,
     "bhavcopy": bhavcopy,
     "gates": gates,
+    "angel-history": angel_history,
     "angel-check": angel_check,
     "dashboard": dashboard,
     "status": status,

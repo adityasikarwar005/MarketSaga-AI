@@ -56,15 +56,17 @@ import json
 import os
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
+from enum import StrEnum
 from pathlib import Path
 from queue import Empty, Queue
+from time import monotonic, sleep
 from typing import Any
 
 from libs.ms_core import env as envmod
 from libs.ms_core.clock import UTC, Clock
 from libs.ms_core.obs import METRICS, get_logger
-from libs.ms_core.schemas import OptionType, Tick
+from libs.ms_core.schemas import Candle, OptionType, Tick
 from libs.ms_data.feed import MarketFeed
 
 log = get_logger(__name__)
@@ -264,6 +266,28 @@ class AngelSession:
             return None
 
 
+def strip_bearer(token: str) -> str:
+    """Return the bare JWT, with any ``Bearer `` prefix removed.
+
+    ``smartapi-python`` stores the raw token on the client and then rewrites the
+    *returned dict* with a prefix:
+
+        self.setAccessToken(jwtToken)
+        user["data"]["jwtToken"] = "Bearer " + jwtToken
+
+    So the value a caller reads out of the response is not the value the client
+    is using. Feeding the prefixed one back through ``setAccessToken`` produces
+    an ``Authorization: Bearer Bearer eyJ...`` header, and the server answers
+    ``Invalid Token`` - which reads as an expired session rather than as a
+    doubled prefix, and sends the investigation to the credentials.
+
+    Stored bare here so every later use adds exactly one prefix.
+    """
+    token = token.strip()
+    prefix = "Bearer "
+    return token[len(prefix) :].strip() if token.startswith(prefix) else token
+
+
 def _totp_now(secret: str) -> str:
     try:
         import pyotp
@@ -349,7 +373,7 @@ def login(
 
     session = AngelSession(
         client_code=creds.client_code,
-        jwt_token=payload.get("jwtToken", ""),
+        jwt_token=strip_bearer(payload.get("jwtToken", "")),
         refresh_token=payload.get("refreshToken", ""),
         feed_token=feed_token,
         issued_on=today,
@@ -942,3 +966,208 @@ class AngelOneFeed(MarketFeed):
             with contextlib.suppress(Exception):
                 self._socket.close_connection()
             self._socket = None
+
+
+# --------------------------------------------------------------------------- #
+# Historical candles
+# --------------------------------------------------------------------------- #
+# The REST historical endpoint returns prices in RUPEES. The websocket returns
+# them in PAISE. Both are Angel, both describe the same instrument, and the
+# module docstring above is about the second one.
+#
+# The plausibility band cannot catch a mix-up between them: NIFTY at 24,180 and
+# the same figure read as paise, 241.80, are both inside it. So there is no
+# guard here that would fire - what there is instead is
+# `jobs/angel_history.py --cross-check`, which compares a fetched daily series
+# against the ten years of NIFTY daily bars this project already holds from an
+# unrelated provider. Two sources agreeing on the level is the only evidence
+# available that the scale is right, and it is worth having once rather than
+# assuming forever.
+HISTORICAL_PRICES_ARE_RUPEES = True
+
+# Angel returns "2026-08-28T09:15:00+05:30" - offset included. Parsed, never
+# assumed: an unmarked value read as UTC would place every intraday bar 5.5
+# hours early, which is the same error shape as everywhere else in this file.
+HISTORY_TZ = timezone(timedelta(hours=5, minutes=30))
+
+# Angel documents 3 requests/second on the historical endpoint. The default here
+# is slower, because what was observed is worse than a 429.
+#
+# Measured on 2026-08-30: roughly four logins and five candle requests inside
+# ninety seconds, and every subsequent request returned an **empty body** - not
+# a rate-limit status, not an error message, just b"". The vendor SDK then
+# raises "Couldn't parse the JSON response", which reads as a broken response
+# format rather than as throttling, and it persisted for at least half an hour.
+#
+# A backfill loop is exactly the shape that trips this: chunked requests issued
+# as fast as the network allows. Pacing them is cheaper than discovering the
+# block halfway through a ten-year fetch and not knowing why.
+HISTORY_MIN_INTERVAL = timedelta(seconds=0.5)
+
+
+class CandleInterval(StrEnum):
+    """Angel's interval names, and how much history each request may span.
+
+    ``max_days`` are the vendor's documented per-request caps at the time of
+    writing. They are configuration rather than truth, like the subscription
+    limits above: verify them against the live API before relying on a backfill
+    plan built from them. Exceeding one is not an error the API explains well -
+    it returns a short series, which reads as a quiet period.
+    """
+
+    ONE_MINUTE = "ONE_MINUTE"
+    THREE_MINUTE = "THREE_MINUTE"
+    FIVE_MINUTE = "FIVE_MINUTE"
+    TEN_MINUTE = "TEN_MINUTE"
+    FIFTEEN_MINUTE = "FIFTEEN_MINUTE"
+    THIRTY_MINUTE = "THIRTY_MINUTE"
+    ONE_HOUR = "ONE_HOUR"
+    ONE_DAY = "ONE_DAY"
+
+    @property
+    def minutes(self) -> int:
+        return {
+            "ONE_MINUTE": 1,
+            "THREE_MINUTE": 3,
+            "FIVE_MINUTE": 5,
+            "TEN_MINUTE": 10,
+            "FIFTEEN_MINUTE": 15,
+            "THIRTY_MINUTE": 30,
+            "ONE_HOUR": 60,
+            "ONE_DAY": 375,  # one Indian equity session, not 1440
+        }[self.value]
+
+    @property
+    def max_days(self) -> int:
+        return {
+            "ONE_MINUTE": 30,
+            "THREE_MINUTE": 60,
+            "FIVE_MINUTE": 100,
+            "TEN_MINUTE": 100,
+            "FIFTEEN_MINUTE": 200,
+            "THIRTY_MINUTE": 200,
+            "ONE_HOUR": 400,
+            "ONE_DAY": 2000,
+        }[self.value]
+
+
+def _history_fetcher(session: AngelSession, api_key: str) -> Callable[[dict[str, str]], Any]:
+    """Bind a SmartConnect to this session for historical calls."""
+
+    def fetch(params: dict[str, str]) -> Any:  # pragma: no cover - needs the vendor package
+        client = _smartconnect(api_key)
+        client.setAccessToken(session.jwt_token)
+        return client.getCandleData(params)
+
+    return fetch
+
+
+def parse_candle_row(row: Sequence[Any], *, instrument_id: int, tf_minutes: int) -> Candle:
+    """One ``[ts, o, h, l, c, v]`` row to a :class:`Candle`.
+
+    ``ts`` is the **left edge** of the bucket, which is what Angel sends and
+    what ``Candle`` documents. Reading it as the right edge shifts every bar by
+    one interval, and on a one-minute series that is a whole bar of lookahead.
+    """
+    if len(row) < 6:
+        raise ValueError(f"candle row has {len(row)} fields, expected 6: {row!r}")
+    ts = datetime.fromisoformat(str(row[0]))
+    if ts.tzinfo is None:
+        raise ValueError(
+            f"candle timestamp {row[0]!r} carries no offset. Reading it as UTC "
+            "would place every bar 5.5 hours early; refusing rather than guessing."
+        )
+    o, h, low, c = (float(row[i]) for i in (1, 2, 3, 4))
+    if not (low <= o <= h and low <= c <= h):
+        raise ValueError(
+            f"candle at {ts.isoformat()} is not internally consistent: "
+            f"o={o} h={h} l={low} c={c}. Open and close must lie inside the range."
+        )
+    return Candle(
+        ts=ts.astimezone(UTC),
+        instrument_id=instrument_id,
+        tf=tf_minutes,
+        o=o,
+        h=h,
+        l=low,
+        c=c,
+        v=int(row[5]),
+    )
+
+
+def historical_candles(
+    session: AngelSession,
+    api_key: str,
+    *,
+    token: int,
+    exchange: str,
+    interval: CandleInterval,
+    start: datetime,
+    end: datetime,
+    fetch: Callable[[dict[str, str]], Any] | None = None,
+    min_interval: timedelta = HISTORY_MIN_INTERVAL,
+) -> list[Candle]:
+    """Candles for one instrument over a date range, chunked to the API's cap.
+
+    Requests are split at ``interval.max_days`` because exceeding the cap
+    returns a **short series rather than an error** - which reads as a quiet
+    period and silently truncates a backfill.
+
+    Chunk boundaries can repeat a bar, so the result is deduplicated on
+    timestamp and returned in order. Two identical bars in a candle series look
+    like a real repeated minute to everything downstream.
+
+    An empty response is not an error: a holiday, a halt, or a range before the
+    contract listed all legitimately have no bars.
+    """
+    envmod.require_broker_credentials()
+    if exchange not in EXCHANGE_TYPE:
+        raise KeyError(f"unknown exchange {exchange!r}; known: {sorted(EXCHANGE_TYPE)}")
+    if end < start:
+        raise ValueError(f"end {end.isoformat()} precedes start {start.isoformat()}")
+
+    call = fetch if fetch is not None else _history_fetcher(session, api_key)
+    span = timedelta(days=interval.max_days)
+    by_ts: dict[datetime, Candle] = {}
+    gap = min_interval.total_seconds()
+    previous = 0.0
+
+    window_start = start
+    while window_start <= end:
+        # Paced, not retried. See HISTORY_MIN_INTERVAL: the block this avoids
+        # answers with an empty body rather than a status, so a retry loop would
+        # keep firing at something that never says stop.
+        if previous and gap:
+            waited = gap - (monotonic() - previous)
+            if waited > 0:
+                sleep(waited)
+        previous = monotonic()
+        window_end = min(window_start + span, end)
+        params = {
+            "exchange": exchange,
+            "symboltoken": str(token),
+            "interval": interval.value,
+            "fromdate": window_start.astimezone(HISTORY_TZ).strftime("%Y-%m-%d %H:%M"),
+            "todate": window_end.astimezone(HISTORY_TZ).strftime("%Y-%m-%d %H:%M"),
+        }
+        payload = call(params)
+        if not isinstance(payload, dict) or not payload.get("status", False):
+            message = ""
+            if isinstance(payload, dict):
+                message = str(payload.get("message") or payload.get("errorcode") or "")
+            raise AngelAuthError(
+                f"historical request failed for {token} {interval.value} "
+                f"{params['fromdate']}..{params['todate']}: {message or payload!r}"
+            )
+        for row in payload.get("data") or []:
+            candle = parse_candle_row(row, instrument_id=token, tf_minutes=interval.minutes)
+            by_ts[candle.ts] = candle
+        window_start = window_end + timedelta(minutes=1)
+
+    out = [by_ts[k] for k in sorted(by_ts)]
+    METRICS.observe("angel_history_candles", float(len(out)))
+    log.info(
+        "historical candles fetched",
+        fields={"token": token, "interval": interval.value, "candles": len(out)},
+    )
+    return out
