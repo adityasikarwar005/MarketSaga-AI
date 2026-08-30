@@ -58,9 +58,11 @@ from libs.ms_data.daily import DailyStore  # noqa: E402
 from libs.ms_models.conformal import (  # noqa: E402
     ConformalError,
     apply_conformal,
+    apply_mondrian,
     coverage,
     coverage_by_regime,
     fit_conformal,
+    fit_mondrian,
     spread,
 )
 from libs.ms_models.cv import Experiment, ExperimentLog  # noqa: E402
@@ -73,6 +75,13 @@ NOMINAL = max(DEFAULT_QUANTILES) - min(DEFAULT_QUANTILES)
 # walk-forward. Kept here so this job can say when it disagrees with it, rather
 # than quietly reporting a different number for the same quantity.
 WALK_FORWARD_COVERAGE = 0.854
+
+# A gap this wide across the volatility terciles means the band is wrong in
+# both directions at once, whatever the marginal number says. Five points is
+# already enough to size a position on the wrong distribution on the days that
+# matter; M54's own audit recorded a 12.5-point version of this reading as
+# calibrated.
+MAX_REGIME_GAP = 0.05
 
 
 def dataset_version(bars) -> str:
@@ -139,6 +148,20 @@ def main(argv: list[str] | None = None) -> int:
     print(band.render())
     print()
 
+    mondrian = None
+    mondrian_fc: list | None = None
+    try:
+        mondrian = fit_mondrian(cal_fc, cal_actual, sigmas[cal], nominal=NOMINAL, buckets=3)
+        mondrian_fc = [
+            apply_mondrian(f, d, mondrian) for f, d in zip(test_fc, test_vol, strict=True)
+        ]
+        for line in mondrian.render():
+            print(line)
+        print()
+    except ConformalError as exc:
+        print(f"    mondrian not fitted: {exc}")
+        print()
+
     after_fc = [apply_conformal(f, band) for f in test_fc]
     before_cov = coverage(test_fc, test_actual, nominal=NOMINAL)
     after_cov = coverage(after_fc, test_actual, nominal=NOMINAL)
@@ -154,28 +177,68 @@ def main(argv: list[str] | None = None) -> int:
         f"    {'conformal':<12} {after_cov:>8.1%} "
         f"{spread(after_fc, nominal=NOMINAL):>10.5f} {after_pin:>10.6f}"
     )
+    if mondrian_fc is not None:
+        print(
+            f"    {'mondrian':<12} {coverage(mondrian_fc, test_actual, nominal=NOMINAL):>8.1%} "
+            f"{spread(mondrian_fc, nominal=NOMINAL):>10.5f} "
+            f"{mean_pinball(mondrian_fc, test_actual, quantiles=DEFAULT_QUANTILES):>10.6f}"
+        )
     print()
 
     print("  coverage by volatility tercile - the number conformal does NOT guarantee:")
-    print(f"    {'regime':<8} {'n':>6} {'raw':>8} {'conformal':>10}")
+    print(f"    {'regime':<8} {'n':>6} {'raw':>8} {'conformal':>10} {'mondrian':>10}")
     raw_regimes = dict(
         (lab, cov)
         for lab, _n, cov in coverage_by_regime(test_fc, test_actual, test_vol, nominal=NOMINAL)
     )
     conf_regimes = coverage_by_regime(after_fc, test_actual, test_vol, nominal=NOMINAL)
+    mond_regimes = (
+        dict(
+            (lab, cov)
+            for lab, _n, cov in coverage_by_regime(
+                mondrian_fc, test_actual, test_vol, nominal=NOMINAL
+            )
+        )
+        if mondrian_fc is not None
+        else {}
+    )
     for label, count, cov in conf_regimes:
-        print(f"    {label:<8} {count:>6,} {raw_regimes.get(label, 0):>7.1%} {cov:>10.1%}")
+        m = f"{mond_regimes[label]:>10.1%}" if label in mond_regimes else f"{'-':>10}"
+        print(f"    {label:<8} {count:>6,} {raw_regimes.get(label, 0):>7.1%} {cov:>10.1%} {m}")
     spread_before = max(raw_regimes.values()) - min(raw_regimes.values())
     spread_after = max(c for _l, _n, c in conf_regimes) - min(c for _l, _n, c in conf_regimes)
+    spread_mond = (
+        max(mond_regimes.values()) - min(mond_regimes.values()) if mond_regimes else float("nan")
+    )
     print()
-    print(f"    quiet-to-busy gap: {spread_before:.1%} raw -> {spread_after:.1%} conformal")
+    print(
+        f"    widest tercile gap: {spread_before:.1%} raw -> {spread_after:.1%} conformal"
+        + (f" -> {spread_mond:.1%} mondrian" if mond_regimes else "")
+    )
     print()
 
     marginal_ok = abs(after_cov - NOMINAL) <= 0.03
     regime_ok = spread_after <= spread_before
-    was_broken = abs(before_cov - NOMINAL) > 0.03
+    marginal_broken = abs(before_cov - NOMINAL) > 0.03
+    regime_broken = spread_before > MAX_REGIME_GAP
+    was_broken = marginal_broken or regime_broken
     print("  ---")
-    if not was_broken:
+    if regime_broken:
+        print("  THE REGIME GAP IS THE BROKEN PART.")
+        print(f"  Raw coverage splits {spread_before:.1%} across the volatility terciles,")
+        print(f"  and a global scale leaves it at {spread_after:.1%} - one multiplier")
+        print("  moves every tercile together, by construction.")
+        if mond_regimes and mondrian_fc is not None:
+            narrower = spread(mondrian_fc, nominal=NOMINAL) <= spread(test_fc, nominal=NOMINAL)
+            tail = " - and do it without widening on average." if narrower else "."
+            print(f"  Per-bucket scales bring it to {spread_mond:.1%}{tail}")
+        print()
+        if not marginal_broken:
+            print(f"  The marginal number was fine throughout ({before_cov:.1%} against")
+            print(f"  {NOMINAL:.0%}), which is exactly how this hides: an over-wide quiet")
+            print("  tercile and a short busy one average to something that reads as")
+            print("  calibrated. The busy tercile is where the tail arrives.")
+    elif not was_broken:
         print("  NOTHING WAS BROKEN ON THIS SPLIT. The raw heads already cover")
         print(f"  {before_cov:.1%} against a nominal {NOMINAL:.0%}, so the conformal scale")
         print(f"  of x{band.scale:.3f} is correcting an error that is not here.")
@@ -233,9 +296,15 @@ def main(argv: list[str] | None = None) -> int:
                 "pinball_after": after_pin,
                 "regime_gap_before": spread_before,
                 "regime_gap_after": spread_after,
+                "regime_gap_mondrian": spread_mond,
+                "mondrian_scale_spread": (
+                    mondrian.spread_of_scales if mondrian is not None else float("nan")
+                ),
                 "marginal_ok": float(marginal_ok),
                 "regime_ok": float(regime_ok),
                 "was_broken": float(was_broken),
+                "marginal_broken": float(marginal_broken),
+                "regime_broken": float(regime_broken),
             },
             notes=args.note
             or (f"{args.symbol} daily bars, split conformal, horizon {args.horizon}"),

@@ -248,3 +248,128 @@ def spread(forecasts: Sequence[QuantileForecast], *, nominal: float) -> float:
         return 0.0
     lo_a, hi_a = band_edges(forecasts[0], nominal)
     return fmean(f.quantiles[hi_a] - f.quantiles[lo_a] for f in forecasts)
+
+
+# --------------------------------------------------------------------------- #
+# Mondrian conformal: one scale per regime
+# --------------------------------------------------------------------------- #
+# A single global scale moves every regime together by construction. Measured on
+# real bars at horizon 5, the raw heads cover 98.0% in the quiet tercile and
+# 88.1% in the busy one, and global conformal leaves that 9.9-point gap at 9.9.
+#
+# The half that matters for sizing is the busy one: it is where the tail
+# arrives, and a band that is short there is short exactly when being short is
+# expensive. Averaging it against an over-wide quiet tercile produces a marginal
+# number that reads as calibrated and is wrong in both directions.
+#
+# Mondrian conformal fits a separate scale per bucket. The cost is that each
+# bucket's order statistic is read off fewer rows, so MIN_CALIBRATION_ROWS
+# applies per bucket rather than to the set as a whole - three terciles of a
+# 600-row calibration block is 200 each, and below that the quantile is being
+# chosen by one or two observations.
+
+
+@dataclass(frozen=True)
+class MondrianBands:
+    """One conformal scale per difficulty bucket, and the edges that assign them.
+
+    ``edges`` come from the **calibration** block. Recomputing them on the test
+    block would let the test data choose its own bucket boundaries, which is a
+    quiet way of fitting to the thing being measured.
+    """
+
+    edges: tuple[float, ...]  # inner boundaries; len == len(bands) - 1
+    bands: tuple[ConformalBand, ...]
+    nominal: float
+
+    def bucket_of(self, difficulty: float) -> int:
+        """Which bucket a row falls in.
+
+        A value outside the calibration range lands in the nearest end bucket
+        rather than raising. That is an extrapolation and it is the honest one:
+        refusing to predict on a quieter-than-ever day would be worse, and the
+        alternative - a global fallback - hides that it happened.
+        """
+        for i, edge in enumerate(self.edges):
+            if difficulty <= edge:
+                return i
+        return len(self.edges)
+
+    @property
+    def scales(self) -> tuple[float, ...]:
+        return tuple(b.scale for b in self.bands)
+
+    @property
+    def spread_of_scales(self) -> float:
+        """How differently the regimes are treated. Near zero means the buckets
+        found nothing, and the global scale would have done the same job."""
+        return max(self.scales) - min(self.scales)
+
+    def render(self) -> list[str]:
+        out = [
+            f"    mondrian: {len(self.bands)} buckets, scales "
+            + ", ".join(f"x{s:.3f}" for s in self.scales)
+            + f"  (spread {self.spread_of_scales:.3f})"
+        ]
+        for i, band in enumerate(self.bands):
+            lo = "-inf" if i == 0 else f"{self.edges[i - 1]:.5f}"
+            hi = "+inf" if i == len(self.bands) - 1 else f"{self.edges[i]:.5f}"
+            flag = "  EXTRAPOLATING" if band.extrapolating else ""
+            out.append(
+                f"      [{lo}, {hi}]  x{band.scale:.3f} on {band.calibration_n:,} rows{flag}"
+            )
+        return out
+
+
+def fit_mondrian(
+    forecasts: Sequence[QuantileForecast],
+    actuals: Sequence[float],
+    difficulty: Sequence[float],
+    *,
+    nominal: float = max(DEFAULT_QUANTILES) - min(DEFAULT_QUANTILES),
+    buckets: int = 3,
+) -> MondrianBands:
+    """A conformal scale per difficulty bucket, all chosen on this block.
+
+    ``difficulty`` is whatever the caller believes predicts how hard a row is -
+    a trailing volatility, in practice. It is taken rather than derived because
+    the right notion of difficulty is a modelling choice, and burying one here
+    would make it invisible.
+    """
+    n = len(forecasts)
+    if not (n == len(actuals) == len(difficulty)):
+        raise ConformalError("forecasts, actuals and difficulty must be the same length")
+    if buckets < 1:
+        raise ConformalError(f"{buckets} buckets is not a partition")
+    per = n // buckets
+    if per < MIN_CALIBRATION_ROWS:
+        raise ConformalError(
+            f"{n} rows over {buckets} buckets is {per} each, below the "
+            f"{MIN_CALIBRATION_ROWS} a conformal quantile needs. Splitting a "
+            "calibration set does not create information - use fewer buckets or "
+            "the global scale."
+        )
+
+    order = sorted(range(n), key=lambda i: difficulty[i])
+    groups = [
+        order[b * per : (b + 1) * per] if b < buckets - 1 else order[b * per :]
+        for b in range(buckets)
+    ]
+    edges = tuple(difficulty[groups[b][-1]] for b in range(buckets - 1))
+    bands = tuple(
+        fit_conformal([forecasts[i] for i in group], [actuals[i] for i in group], nominal=nominal)
+        for group in groups
+    )
+    out = MondrianBands(edges=edges, bands=bands, nominal=nominal)
+    log.info(
+        "mondrian bands fitted",
+        fields={"buckets": buckets, "scales": list(out.scales), "spread": out.spread_of_scales},
+    )
+    return out
+
+
+def apply_mondrian(
+    forecast: QuantileForecast, difficulty: float, bands: MondrianBands
+) -> QuantileForecast:
+    """Scale by the band belonging to this row's bucket."""
+    return apply_conformal(forecast, bands.bands[bands.bucket_of(difficulty)])

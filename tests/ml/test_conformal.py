@@ -20,11 +20,13 @@ from libs.ms_models.conformal import (
     MIN_CALIBRATION_ROWS,
     ConformalError,
     apply_conformal,
+    apply_mondrian,
     band_edges,
     conformity_score,
     coverage,
     coverage_by_regime,
     fit_conformal,
+    fit_mondrian,
     spread,
 )
 from libs.ms_models.quantile import QuantileForecast
@@ -217,3 +219,159 @@ class TestGuards:
         band = fit_conformal(forecasts, actuals, nominal=0.99)
         assert band.extrapolating
         assert "top of the calibration set" in band.render()
+
+
+def _heteroscedastic(n: int, *, half_width: float, quiet: float, busy: float, seed: int = 7):
+    """Bands of fixed width against outcomes whose scale switches by regime.
+
+    A fixed-width band over-covers the quiet half and under-covers the busy one -
+    the shape measured on real bars, where the raw heads reached 98.0% quiet and
+    88.1% busy. One global scale cannot fix that; it moves both together.
+    """
+    rng = random.Random(seed)
+    forecasts, actuals, difficulty = [], [], []
+    for i in range(n):
+        sigma = busy if i % 2 else quiet
+        forecasts.append(_band(-half_width, 0.0, half_width))
+        actuals.append(rng.gauss(0.0, sigma))
+        difficulty.append(sigma)
+    return forecasts, actuals, difficulty
+
+
+class TestMondrianNullCase:
+    """The null test: buckets must not invent a difference that is not there."""
+
+    def test_homoscedastic_data_gives_near_identical_scales(self) -> None:
+        forecasts, actuals = _series(1800, half_width=1.0, sigma=1.0)
+        difficulty = [1.0 + i * 1e-9 for i in range(1800)]  # meaningless ordering
+        bands = fit_mondrian(forecasts, actuals, difficulty, nominal=NOMINAL, buckets=3)
+        assert bands.spread_of_scales < 0.25, (
+            "the buckets found a regime difference in data that has none - "
+            f"scales {bands.scales}"
+        )
+
+    def test_and_agrees_with_the_global_scale_there(self) -> None:
+        forecasts, actuals = _series(1800, half_width=1.0, sigma=1.0)
+        difficulty = [1.0] * 1800
+        glob = fit_conformal(forecasts, actuals, nominal=NOMINAL)
+        bands = fit_mondrian(forecasts, actuals, difficulty, nominal=NOMINAL, buckets=3)
+        assert all(abs(s - glob.scale) < 0.25 for s in bands.scales)
+
+
+class TestMondrianOnRegimes:
+    def test_the_busy_bucket_gets_the_wider_scale(self) -> None:
+        forecasts, actuals, difficulty = _heteroscedastic(
+            1800, half_width=1.645, quiet=0.4, busy=2.5
+        )
+        bands = fit_mondrian(forecasts, actuals, difficulty, nominal=NOMINAL, buckets=2)
+        quiet_scale, busy_scale = bands.scales
+        assert busy_scale > quiet_scale
+        assert quiet_scale < 1.0 < busy_scale, (
+            "the quiet band should narrow and the busy one widen - a single "
+            "global scale can do neither"
+        )
+
+    def test_a_global_scale_gets_the_marginal_number_right_and_both_regimes_wrong(
+        self,
+    ) -> None:
+        """The failure this whole module exists for, measured.
+
+        On heteroscedastic data a single scale lands marginal coverage at 90.8%
+        against a nominal 90% - a number that reads as calibrated - while the
+        quiet tercile sits at 100% and the busy one at 81.6%. Both are wrong,
+        in opposite directions, and the average hides it.
+        """
+        cal_f, cal_a, _cal_d = _heteroscedastic(1800, half_width=1.645, quiet=0.4, busy=2.5, seed=1)
+        test_f, test_a, test_d = _heteroscedastic(
+            1800, half_width=1.645, quiet=0.4, busy=2.5, seed=2
+        )
+        glob = fit_conformal(cal_f, cal_a, nominal=NOMINAL)
+        scaled = [apply_conformal(f, glob) for f in test_f]
+
+        marginal = coverage(scaled, test_a, nominal=NOMINAL)
+        covs = [
+            c
+            for _l, _n, c in coverage_by_regime(scaled, test_a, test_d, nominal=NOMINAL, buckets=2)
+        ]
+
+        assert abs(marginal - NOMINAL) < 0.02, "the marginal number should look fine"
+        assert max(covs) - min(covs) > 0.15, (
+            "and the regimes underneath it should not be - if they agree here, "
+            "this test has stopped demonstrating anything"
+        )
+
+    def test_per_bucket_scales_close_the_gap_the_global_one_leaves(self) -> None:
+        cal_f, cal_a, cal_d = _heteroscedastic(1800, half_width=1.645, quiet=0.4, busy=2.5, seed=1)
+        test_f, test_a, test_d = _heteroscedastic(
+            1800, half_width=1.645, quiet=0.4, busy=2.5, seed=2
+        )
+
+        def gap(forecasts: list[QuantileForecast]) -> float:
+            covs = [
+                c
+                for _l, _n, c in coverage_by_regime(
+                    forecasts, test_a, test_d, nominal=NOMINAL, buckets=2
+                )
+            ]
+            return max(covs) - min(covs)
+
+        glob = fit_conformal(cal_f, cal_a, nominal=NOMINAL)
+        global_gap = gap([apply_conformal(f, glob) for f in test_f])
+        bands = fit_mondrian(cal_f, cal_a, cal_d, nominal=NOMINAL, buckets=2)
+        mondrian_gap = gap(
+            [apply_mondrian(f, d, bands) for f, d in zip(test_f, test_d, strict=True)]
+        )
+
+        assert global_gap > 0.15
+        assert mondrian_gap < global_gap / 4, (
+            f"per-bucket scales did not close the gap: global {global_gap:.1%}, "
+            f"mondrian {mondrian_gap:.1%}"
+        )
+
+    def test_it_does_not_buy_that_by_wrecking_the_marginal_number(self) -> None:
+        """Closing a gap by making both halves equally wrong would satisfy the
+        test above and be worse than doing nothing."""
+        cal_f, cal_a, cal_d = _heteroscedastic(1800, half_width=1.645, quiet=0.4, busy=2.5, seed=1)
+        test_f, test_a, test_d = _heteroscedastic(
+            1800, half_width=1.645, quiet=0.4, busy=2.5, seed=2
+        )
+        bands = fit_mondrian(cal_f, cal_a, cal_d, nominal=NOMINAL, buckets=2)
+        out = [apply_mondrian(f, d, bands) for f, d in zip(test_f, test_d, strict=True)]
+        assert coverage(out, test_a, nominal=NOMINAL) == pytest.approx(NOMINAL, abs=0.03)
+
+
+class TestMondrianGuards:
+    def test_bucket_edges_come_from_the_calibration_block(self) -> None:
+        """Recomputing them on the test block lets the test data choose its own
+        boundaries, which is a quiet way of fitting to what is being measured."""
+        forecasts, actuals, difficulty = _heteroscedastic(1200, half_width=1.0, quiet=0.5, busy=2.0)
+        bands = fit_mondrian(forecasts, actuals, difficulty, nominal=NOMINAL, buckets=2)
+        assert len(bands.edges) == 1
+        assert min(difficulty) <= bands.edges[0] <= max(difficulty)
+
+    def test_a_value_outside_the_calibration_range_lands_in_an_end_bucket(self) -> None:
+        """Refusing to predict on a quieter-than-ever day would be worse, and a
+        silent global fallback would hide that it happened."""
+        forecasts, actuals, difficulty = _heteroscedastic(1200, half_width=1.0, quiet=0.5, busy=2.0)
+        bands = fit_mondrian(forecasts, actuals, difficulty, nominal=NOMINAL, buckets=2)
+        assert bands.bucket_of(-99.0) == 0
+        assert bands.bucket_of(99.0) == len(bands.bands) - 1
+
+    def test_too_few_rows_per_bucket_is_refused(self) -> None:
+        """Splitting a calibration set does not create information."""
+        forecasts, actuals = _series(250, half_width=1.0, sigma=1.0)
+        with pytest.raises(ConformalError, match="does not create information"):
+            fit_mondrian(forecasts, actuals, [1.0] * 250, nominal=NOMINAL, buckets=3)
+
+    def test_mismatched_lengths_are_refused(self) -> None:
+        forecasts, actuals = _series(600, half_width=1.0, sigma=1.0)
+        with pytest.raises(ConformalError, match="same length"):
+            fit_mondrian(forecasts, actuals, [1.0] * 599, nominal=NOMINAL, buckets=2)
+
+    def test_the_render_names_every_bucket_and_its_range(self) -> None:
+        forecasts, actuals, difficulty = _heteroscedastic(1200, half_width=1.0, quiet=0.5, busy=2.0)
+        lines = "\n".join(
+            fit_mondrian(forecasts, actuals, difficulty, nominal=NOMINAL, buckets=2).render()
+        )
+        assert "-inf" in lines and "+inf" in lines
+        assert "mondrian" in lines
