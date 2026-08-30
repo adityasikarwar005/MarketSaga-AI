@@ -2311,3 +2311,59 @@ seen fail is a guard nobody has measured.
 means the toolchain is now deliberately stale until somebody bumps it, and the
 bump is a three-file edit that the tests will insist on completing. That is the
 trade: silent drift replaced by explicit friction.
+
+## Real cost rates, and the two things the arithmetic settled
+
+`config/costs.yaml` shipped with placeholders and a warning that they were
+plausible magnitudes rather than statutory rates. They are now real for trades
+from 2026-08-30, derived from an Angel One brokerage-calculator breakup and
+reconciled against its own total.
+
+The trade priced: NIFTY option, buy 100 / sell 120, quantity 75. Net buy 7,500,
+net sell 9,000, total premium turnover 16,500.
+
+| line | Angel | reconstructed |
+|---|---|---|
+| Brokerage | 40.00 | 40.00 |
+| STT/CTT | 13.50 | 13.50 |
+| Transaction | 5.86 | 5.86 |
+| Stamp Duty | 0.23 | 0.23 |
+| SEBI Fees | 0.02 | 0.02 |
+| GST | 8.26 | 8.26 |
+| **TOTAL** | **67.87** | **67.86** |
+
+The one-paisa gap is stamp duty: 0.003% of 7,500 is 0.225 and the calculator
+displays 0.23.
+
+**Two things the arithmetic settled that a reading of the circulars would not
+have.**
+
+*GST is charged on brokerage, transaction charges and SEBI fees only.* 18% of
+that base is 8.26 and matches to the paisa. 18% of every charge would be 10.73.
+Including STT and stamp duty in the base would make every trade look 30% more
+expensive than it is - internally consistent, plausible, and wrong in the
+direction that makes a strategy look worse than it is.
+
+*STT is on the sell premium, not on turnover.* 13.50 against 9,000 is 0.15%
+exactly; against total turnover it would be 0.0818%, which is not a number
+anybody legislates. The clean figure is the evidence for the sell-side reading.
+
+**What the single total could not have told us.** Before the itemised breakup
+arrived, the only number available was "Other Charges 27.87" - one equation with
+five unknowns. Four plausible rate sets were tried and none reproduced it; the
+closest was 1.11 short, which would have made every cost roughly 4% light.
+Picking it would have produced a cost model that is internally consistent and
+flatters every P&L, which is the failure this project keeps recording. The
+itemised lines were worth waiting for.
+
+**The placeholder is kept, not deleted.** Costs are point-in-time and the
+backtest runs from 2016. Overwriting the historical entry with 2026 rates would
+price a 2017 trade with charges that did not exist then. The old schedule stays,
+still marked placeholder, and `audit_cost_config` now answers differently by
+date: verified for 2026-08-30, not verified for 2020-06-01. The gate report says
+which boundary that is rather than counting schedules.
+
+**Still a guess, and now visible.** `SlippageModel` is uncalibrated - half a
+point assumed, no fills behind it. Correct statutory rates do not make a fill
+price real, and G0 now lists that separately so fixing the rates cannot be
+mistaken for fixing the cost model.

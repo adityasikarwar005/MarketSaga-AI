@@ -24,3 +24,40 @@ schedules:
     stamp_duty_pct_buy: 0.00003
     gst_pct_on_charges: 0.18
     source: "TODO: PLACEHOLDER - verify against broker charge sheet and exchange circulars"
+
+  # Real rates, derived from an Angel One brokerage-calculator breakup on
+  # 2026-08-30 and reconciled against its own total.
+  #
+  # The trade priced: NIFTY option, buy 100 / sell 120, quantity 75.
+  #   net buy value 7,500   net sell value 9,000   total premium turnover 16,500
+  #   brokerage 40.00  STT 13.50  txn 5.86  stamp 0.23  SEBI 0.02  GST 8.26
+  #   TOTAL 67.87
+  #
+  # Two of these were confirmed rather than assumed:
+  #
+  # GST is charged on brokerage + transaction charges + SEBI fees ONLY. 18% of
+  # that base is 8.26 and matches to the paisa; 18% of every charge would be
+  # 10.73. Applying it to STT and stamp duty as well would make each trade look
+  # 30% more expensive than it is - plausible, internally consistent, wrong.
+  #
+  # STT is 13.50 against the SELL premium of 9,000, which is 0.15% exactly. Read
+  # against total turnover it would be 0.0818%, which is not a rate anybody
+  # legislates - the clean number is the evidence that the sell-side reading is
+  # the right one.
+  #
+  # SEBI and stamp duty are displayed to two decimals and are too small to read
+  # precisely from this trade: 0.02 and 0.23 are the rounded forms of 0.0165 and
+  # 0.225, which are the standard 10 per crore and 0.003% of buy value. Those
+  # standard rates are used here and both reproduce the display.
+  #
+  # The transaction rate is 5.86 / 16,500 = 0.0355% of premium. Also read off a
+  # two-decimal display, so it is accurate to about a paisa on this trade size.
+  # Worth confirming against a real contract note before G7 is claimed.
+  - effective_from: 2026-08-30
+    brokerage_per_order: 20.0             # 40.00 across two executed orders
+    exchange_txn_pct_of_premium: 0.000355 # 5.86 / 16,500
+    stt_pct_sell_premium: 0.0015          # 13.50 / 9,000, sell side only
+    sebi_fee_pct_of_turnover: 0.000001    # 10 per crore; 0.0165 displays as 0.02
+    stamp_duty_pct_buy: 0.00003           # 0.003% of buy; 0.225 displays as 0.23
+    gst_pct_on_charges: 0.18              # on brokerage + txn + SEBI, NOT on STT
+    source: "Angel One brokerage calculator, NSE F&O options, retrieved 2026-08-30; reconciled against its own breakup total of 67.87"
