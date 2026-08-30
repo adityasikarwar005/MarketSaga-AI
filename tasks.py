@@ -24,6 +24,7 @@ Cross-platform, no `make` required.
     python tasks.py archive   NDJSON -> Parquet, and the research coverage report
     python tasks.py migrate   apply database migrations
     python tasks.py status    where the project stands right now
+    python tasks.py gates     every gate, derived rather than remembered
 """
 
 from __future__ import annotations
@@ -161,6 +162,17 @@ def bhavcopy() -> None:
     thousand requests to a free public archive, so the default is thirty days.
     """
     run(_py(), "jobs/bhavcopy_backfill.py", *sys.argv[2:], check=False)
+
+
+def gates() -> None:
+    """Every gate's real state, derived from the repository.
+
+    `docs/gates.md` is the signed ledger; this reads the experiment log, the
+    filesystem and the config and says what is true right now, so the ledger can
+    be checked against something rather than trusted. Add --strict to exit
+    non-zero unless every gate passes.
+    """
+    run(_py(), "jobs/gate_report.py", *sys.argv[2:], check=False)
 
 
 def angel_check() -> None:
@@ -456,6 +468,7 @@ COMMANDS = {
     "ci": ci,
     "restore-drill": restore_drill,
     "bhavcopy": bhavcopy,
+    "gates": gates,
     "angel-check": angel_check,
     "dashboard": dashboard,
     "status": status,

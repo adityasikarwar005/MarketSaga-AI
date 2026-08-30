@@ -2,6 +2,12 @@
 
 > The spine of the project. **No entry here = no phase advance.**
 > Paste the *measured numbers*, not adjectives. Sign with date + commit hash.
+>
+> This file is hand-maintained and therefore drifts. `python tasks.py gates`
+> derives the same state from the experiment log, the filesystem and the config,
+> and separates the three things a `—` in the table below can hide: **not
+> measured**, **cannot be measured yet**, and **measured and failed**. When the
+> two disagree, the derived one is right and this file is stale.
 
 | Gate | Phase | Target | Measured | Date | Commit | Signed |
 |------|-------|--------|----------|------|--------|--------|
@@ -33,10 +39,15 @@ was empty for two days while three failures sat in the gate rows above.
 |------|------|---------|-----------|----------|
 | 2026-08-28 | G4 | gap CRPS -2.4% vs naive on 2 465 sessions; gate needs +10% | The regularisation sweep improves monotonically to a plateau where the feature weights are essentially zero. Daily cross-asset features carry almost nothing about the overnight gap. Best single-feature subset reaches +1.0%, which is the ceiling rather than a step towards +10%. | **Continue, no pivot triggered.** Recorded late: this table was empty until 2026-08-30 and the failure had been sitting only in the gate row. |
 | 2026-08-30 | G5 (partial) | `M5 beats HAR-RV on QLIKE` fails. M55 on ten years of real NIFTY bars: **+0.0%** Parkinson, **-0.1%** Garman-Klass. Trial 22. | HAR's three lags exhaust what daily OHLC carries about tomorrow's realised variance. The residual booster's own acceptance test declined to keep it in three of four folds - the model is reporting that it has nothing to add, not failing to fit. No extra features were supplied to `HARRow.extra`. | **Not a G5 attempt.** One of six criteria measured early and failing. Recorded now so the three-attempt counter has something to count. |
+| 2026-08-30 | G5 (partial) | `M1 > M0 on log loss (bootstrap CI excl. 0)` fails. M53 vs the rules baseline on ten years of real NIFTY bars: delta +0.00408, CI **[-0.00067, +0.00902]** - straddles zero. Brier skill 0.0024 (want >0.02), AUC 0.5292 (want >=0.55). Trial 24. | The model's own `has_discrimination()` gate refused in 4 folds of 4 - the booster cannot rank the held-out rows, so calibration was skipped. `M0_rules` scores 0.69289 where a coin flip is 0.69315, so the baseline has no skill either. Two models with nothing to say about next-day direction. | **Not a G5 attempt.** Daily analogues of intraday features, because no intraday history exists. A second G5 criterion measured early and failing. M53 also had **no Verify block in the plan** until now; one was added. |
 | 2026-08-30 | (pre-G5) | M54 quantile heads lose to their own Gaussian fallback on pinball: **-2.2%** at 1d, **-1.3%** at 5d. Trial 23. | Pinball-optimal quantiles fitted on a sample with few tail events place the 5% and 95% heads inside where the true tails are. The heads are *better* calibrated than the fallback (85.4% vs 82.7%) and still short of nominal. | **No change made.** Widening the heads until coverage reaches 90% would tune the number the check exists to catch. Consequence measured instead: M75 sizes 1.09x-11.38x too large. |
 
-**Three models have now been measured on real data and all three lost** - M35 to
-a one-variable baseline, M55 to a three-term one, M54 to `sigma * z_alpha`. That
+**Four models have now been measured on real data and all four lost** - M35 to
+a one-variable baseline, M55 to a three-term one, M54 to `sigma * z_alpha`, and
+M53 to a rules baseline that is itself indistinguishable from a coin flip.
+Three of the four declined themselves before any external metric was computed:
+M55's booster refused to be kept, M54's heads sat inside the true tails, M53's
+discrimination gate refused to calibrate. That
 is not yet "three failed attempts at G5" in the sense the kill policy means:
 G5 has not been attempted, and two of these are inputs to it rather than runs at
 it. But the direction of the evidence is one way so far, and this table exists so

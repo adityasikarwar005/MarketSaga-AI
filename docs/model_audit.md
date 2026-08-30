@@ -1906,3 +1906,56 @@ tuning a number until it passes the check that exists to catch it. This is a
 measurement of an error that is currently live, recorded so the recalibration -
 if it happens - is a design decision with its own justification and its own
 held-out period rather than a reflex.
+
+## M53 had no Verify block, and has now been measured against its own baseline
+
+`direction.py` opens by calling itself "the first learned model that has to beat
+the rules baseline on its own terms". It never had. The module was marked ☑ in
+the tracker with 23 tests, and its section in `megaplan.md` was a single header
+line: no Tasks, no Built, and **no Verify block at all**.
+
+That is the quiet version of the failure R1 exists to prevent. R1 says a module
+is not done until its Verify block passes; a module with no Verify block cannot
+fail it, and gets marked done on the strength of a green test file. The tests
+were good - a null test, column-order, missing-is-not-zero, isotonic
+monotonicity - and none of them asks the question the module's own first
+sentence asks.
+
+**Measured, on ten years of real NIFTY bars, walk-forward over four folds.**
+Trial 24.
+
+| | log loss | brier | accuracy |
+|---|---|---|---|
+| M0_rules | 0.69289 | 0.24973 | 0.505 |
+| M1_trees | 0.68882 | 0.24765 | 0.552 |
+
+Delta log loss +0.00408, bootstrap CI **[-0.00067, +0.00902]**. The interval
+straddles zero, so the challenger has not been shown to beat anything -
+`compare()` requires the interval to exclude zero precisely so a point-estimate
+win cannot ship. Brier skill 0.0024 against G5's >0.02; AUC 0.5292 against
+>=0.55; reliability slope 1.024, the one criterion that passes.
+
+**The model's own gate got there first, and that is the part worth keeping.** In
+4 folds of 4, `has_discrimination()` found the booster could not rank the
+held-out rows at all, so isotonic calibration was skipped rather than inventing
+a shape to correct. An internal refusal, reached before any external metric.
+This is now the third time a model in this repository has declined itself: M55's
+residual booster refused to be kept in three folds of four, M54's heads sat
+inside the true tails, and M53 cannot rank. Different mechanisms, same answer.
+
+The consequence propagates and is correct: no discrimination means no
+calibrator, which means no `p_lower`, which means `uncertainty_modifier` halves
+the position for an unquantified estimate. The chain behaves properly on a model
+with nothing to say. That is worth verifying once rather than assuming forever.
+
+**What the baseline scored is the context that stops this being a story about a
+strong opponent.** `M0_rules` logs 0.69289 where a coin flip is 0.69315. The
+rules baseline has essentially no skill on this data either. Two models, neither
+with anything to say about next-day direction.
+
+**What this is not.** M53 is an intraday model and there is no intraday history,
+so both models were fed daily analogues of the five- and thirty-minute features
+`RulesBaseline` reads. G5 asks about an intraday model on intraday data and this
+does not answer it. A loss is still informative - same code, same baseline, no
+edge on the easier-to-sample horizon - but a win would have proved nothing, and
+the job says so above its own output so the number cannot be quoted loose.

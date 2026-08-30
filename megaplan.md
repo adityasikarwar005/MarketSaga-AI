@@ -1225,6 +1225,66 @@ python jobs/experiment_log.py --verify    # chain intact = no run was quietly de
 ---
 
 #### M53 · Direction model ⚙ → card **[AI-8]**
+
+**Owns:** the probability that the next move is up. It is the model the whole
+L5 layer exists to produce, and the one G5 is a gate on.
+
+**Tasks**
+- [x] Boosted-tree classifier behind the same `Model` interface the rules baseline implements
+- [x] Feature order fixed at fit time, never inherited from a dict
+- [x] Missing is a sentinel plus an indicator column, never a silent zero
+- [x] Isotonic calibration on a held-out chronological slice, and a record of whether it happened
+- [x] Discrimination gate: refuse to calibrate a model that cannot rank
+
+**Verify**
+```bash
+pytest tests/ml/test_direction.py
+python jobs/eval_direction.py --no-log   # vs the rules baseline, on real bars
+```
+
+*This block did not exist until 2026-08-30.* The module was marked ☑ with 23
+tests and no Verify command anywhere, so R1 - "a module is not done until its
+Verify block passes" - had nothing to check it against. Marked ☑ because the
+tests pass and the code is sound; the measurement below is a separate question
+and is G5's.
+
+**Built** `libs/ms_models/direction.py`, `tests/ml/test_direction.py` (23 tests),
+`jobs/eval_direction.py`.
+
+**Measured against the rules baseline for the first time on 2026-08-30**, on ten
+years of real NIFTY bars, walk-forward over four folds. Trial 24.
+
+| | log loss | brier | accuracy |
+|---|---|---|---|
+| M0_rules | 0.69289 | 0.24973 | 0.505 |
+| M1_trees | 0.68882 | 0.24765 | 0.552 |
+
+Delta log loss **+0.00408**, bootstrap CI **[-0.00067, +0.00902]** - the interval
+straddles zero, so `beats_baseline` is **NO**. Against G5's other criteria on
+this data: reliability slope 1.024 (ok), Brier skill 0.0024 against >0.02 (no),
+AUC 0.5292 against >=0.55 (no).
+
+**The model's own gate reached the same verdict first.** In 4 folds of 4,
+`has_discrimination()` found the booster could not rank the held-out rows at
+all, so isotonic calibration was skipped rather than inventing a shape to
+correct. That is an independent refusal from inside the model, before any
+external metric was computed - and it is the same shape as M55's residual
+booster declining to be kept. It also means no interval reaches M75, which then
+halves the position for an unquantified estimate: correct behaviour, and worth
+knowing is happening.
+
+**Note what the baseline scored.** `M0_rules` logs 0.69289 where a coin flip is
+0.69315. The baseline has essentially no skill on this data either, so this is
+not "the learned model lost to a strong opponent" - it is two models with
+nothing to say about daily direction.
+
+**This is not a G5 measurement and must not be reported as one.** M53 is an
+intraday model and there is no intraday history, so `eval_direction.py` feeds
+both models daily analogues of the five- and thirty-minute features the rules
+baseline reads. A loss here is informative - the same code, the same baseline,
+no edge on the easier-to-sample horizon. A win here would have proved nothing
+about intraday.
+
 #### M54 · Quantile model ✅ → card **[AI-9]**
 
 **Built** `libs/ms_models/quantile_heads.py`, `tests/ml/test_quantile_heads.py`
@@ -2306,7 +2366,7 @@ remain are real work rather than plumbing. The remaining 17 modules are not
 evenly sized and are not evenly hard.
 
 *And it says almost nothing about the only question that matters.* Of the 81
-modules, **8 have ever consumed real market data**:
+modules, **9 have ever consumed real market data**:
 
 | | |
 |---|---|
@@ -2318,17 +2378,25 @@ modules, **8 have ever consumed real market data**:
 | M70 | IV surface fitter - run on a real NIFTY chain, and the finding was that daily marks **cannot** support the fit. Consumed real data; not validated on it. |
 | M55 | volatility model - measured on ten years of real NIFTY bars and **does not beat HAR-RV** (+0.0% Parkinson, -0.1% Garman-Klass). Trial 22. |
 | M54 | quantile heads - **does not beat their own Gaussian fallback** on pinball (-2.2% at 1d, -1.3% at 5d), and both under-cover: a 90% band holds 83-85%. Trial 23. |
+| M53 | direction model - **does not beat the rules baseline**; log-loss CI [-0.0007, +0.0090] straddles zero, and its own discrimination gate refused in 4 folds of 4. Trial 24. |
 
-That is **10%**, and the last three entries show why the count is a weak
-measure - all three are negatives. M70 found that 36.9% of the marks it was
+That is **11%**, and the last four entries show why the count is a weak
+measure - all four are negatives. M70 found that 36.9% of the marks it was
 given price a negative butterfly before any model touches them. M55 did not beat
 HAR-RV, its own residual booster declining to be kept in three of four folds.
 M54 did not beat its own Gaussian fallback on pinball.
 
-Consuming real data and being validated on it are different events. Eight
-modules have done the first; **three models have now attempted the second and
-all three lost** - M35 by 2.4% to a one-variable baseline, M55 by 0.1% to a
-three-term one, M54 by 2.2% to `sigma * z_alpha`.
+Consuming real data and being validated on it are different events. Nine
+modules have done the first; **four models have now attempted the second and all
+four lost** - M35 by 2.4% to a one-variable baseline, M55 by 0.1% to a
+three-term one, M54 by 2.2% to `sigma * z_alpha`, and M53 to a rules baseline
+that is itself indistinguishable from a coin flip.
+
+*Three of the four declined themselves before any external metric was computed.*
+M55's residual booster refused to be kept in three folds of four; M54's heads
+sat inside the true tails; M53's discrimination gate refused to calibrate in
+four folds of four. The guards are not decoration - they reach the same verdict
+independently, and they reach it first.
 
 *The most useful thing found on real data so far is not a model result.* Both
 M54's fitted heads and the Gaussian they were meant to replace produce a 90%
