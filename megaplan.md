@@ -259,6 +259,28 @@ pre-commit run --all-files            # exits 0
 **Done:** clean machine → clone → `make up` → smoke test green in under 5 minutes.
 **Traps:** don't add Kubernetes. Don't add a web framework yet.
 
+**`tasks.py verify` could not fail (found 2026-08-30).** Every stage ran with
+`check=False`, the return codes were discarded, and the `__main__` dispatcher
+called the command without reading what it returned. `tasks.py verify` — the
+command CLAUDE.md defines as "a module is not done until this is green" —
+exited 0 whether lint failed, mypy failed, or the suite was red. It had been
+that way since the file was written, so **every green `verify` recorded in this
+plan before that date attested to nothing but the command having run.**
+
+Only GitHub Actions could go red, because it runs the same tools as separate
+steps. That is the other end of the pipeline-red-for-four-pushes note in
+CLAUDE.md, and it re-frames the ruff 0.16.4/0.16.5 incident: the version drift
+was real, but a matching ruff would not have saved that push either.
+
+Found by accident. The black pre-commit hook reformatted a file that `verify`
+had just called clean two minutes earlier, and the two answers could not both
+be true. Fixed by having each stage return its code and the dispatcher
+`sys.exit` it; `tests/unit/test_verify_reports_failure.py` pins it. The first
+version of that test's dispatcher check passed against the broken dispatcher —
+it looked for any `sys.exit` in the `__main__` block and found the usage-error
+one — which is the same defect class one level up, and is why the mutation was
+run rather than assumed.
+
 ---
 
 #### M01 · Config registry
@@ -410,6 +432,26 @@ the master reports one entry, and every earlier trade resolves to the later
 contract without anything failing. Exchange tokens get the same treatment —
 brokers recycle them — which is why stored records reference `instrument_id`,
 the one identifier that may never be reused.
+
+**Reference data, 2026-08-30.** The module was ✅ while every row in
+`config/instruments.yaml` was `verified: false` — the machinery was right and
+the numbers in it were guesses. NSE/FAOP/70616 cut NIFTY 75 → 65 and BANKNIFTY
+35 → 30 from the January 2026 series, and the config had been carrying 75 and
+15. Both are now dated entries citing the circular, cross-checked against every
+live NFO contract in Angel's scrip master.
+
+`expiry_weekday` said Thursday for NIFTY and BANKNIFTY. NSE moved index expiry
+to Tuesday: 16 of the 18 live expiries are Tuesdays and the other two are the
+Monday before a Tuesday holiday — one of which (2026-11-24) this repo's own
+holiday calendar already lists, so the correction is corroborated internally
+rather than only by the circular.
+
+Only NIFTY-FUT is `verified: true`. BANKNIFTY's lot changed more than once
+between 2020 and 2025 and this file cannot yet say when, so its **current** spec
+is sourced and its **history** is still marked TODO — which is what keeps it
+false. `tests/unit/test_instrument_provenance.py` makes that distinction
+enforceable: `verified: true` alongside a TODO source now fails, so the flag
+cannot outrun its evidence again.
 
 Expiry rolls **backwards** off a holiday, never forwards. Forwards settles a
 contract after the date printed on it, and a daily-close backtest never shows

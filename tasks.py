@@ -111,32 +111,61 @@ def down() -> None:
     run(docker, "compose", "down")
 
 
-def test() -> None:
-    run(_py(), "-m", "pytest", "-q", check=False)
+# `check=False` throughout is deliberate: a lint failure must not stop the type
+# checker from running, or you fix one thing per round trip. What was NOT
+# deliberate is that the return codes were then dropped on the floor - see
+# `verify` below.
 
 
-def lint() -> None:
-    run(_py(), "-m", "ruff", "check", ".", check=False)
-    run(_py(), "-m", "black", "--check", ".", check=False)
+def test() -> int:
+    return run(_py(), "-m", "pytest", "-q", check=False)
 
 
-def fmt() -> None:
-    run(_py(), "-m", "black", ".", check=False)
-    run(_py(), "-m", "ruff", "check", "--fix", ".", check=False)
+def lint() -> int:
+    ruff = run(_py(), "-m", "ruff", "check", ".", check=False)
+    black = run(_py(), "-m", "black", "--check", ".", check=False)
+    return ruff or black
 
 
-def typecheck() -> None:
-    run(_py(), "-m", "mypy", check=False)
+def fmt() -> int:
+    black = run(_py(), "-m", "black", ".", check=False)
+    ruff = run(_py(), "-m", "ruff", "check", "--fix", ".", check=False)
+    return black or ruff
 
 
-def verify() -> None:
-    """What CI runs. A module is not done until this is green."""
-    print("\n=== lint ===")
-    lint()
-    print("\n=== typecheck ===")
-    typecheck()
-    print("\n=== test ===")
-    test()
+def typecheck() -> int:
+    return run(_py(), "-m", "mypy", check=False)
+
+
+def verify() -> int:
+    """What CI runs. A module is not done until this is green.
+
+    It could not be red. Every stage ran with `check=False`, the return codes
+    were discarded, and the dispatcher at the bottom of this file called the
+    command without looking at what it returned - so `tasks.py verify` exited 0
+    whether the suite passed, failed, or never ran at all.
+
+    Nothing was caught locally as a result. GitHub Actions runs the same tools
+    as separate steps and was the only thing able to fail, which is the shape
+    of the pipeline-red-for-four-pushes story in CLAUDE.md and of the ruff
+    0.16.4/0.16.5 incident in tests/unit/test_toolchain_pins.py, where a "green
+    verify" went red nineteen seconds after the push. The version drift there
+    was real but it was never sufficient: verify would have been green with the
+    matching ruff too, because verify was green unconditionally.
+
+    Every stage still runs even after one fails - that part was right, and it
+    is why this reports all the failing stages rather than only the first.
+    """
+    failed = []
+    for name, stage in (("lint", lint), ("typecheck", typecheck), ("test", test)):
+        print(f"\n=== {name} ===")
+        if stage() != 0:
+            failed.append(name)
+    if failed:
+        print(f"\nverify: FAILED at {', '.join(failed)}")
+        return 1
+    print("\nverify: green")
+    return 0
 
 
 def ci() -> None:
@@ -282,14 +311,25 @@ def status() -> None:
 
     print("\nopen blockers before Gate G0:")
     blockers = []
-    if cfg.unverified_instruments():
-        blockers.append("verify instrument reference data against the exchange circular")
+    if unverified := cfg.unverified_instruments():
+        # Name them. "verify instrument reference data" read as all six for
+        # months after NIFTY-FUT had been verified against NSE/FAOP/70616, and
+        # a blocker nobody can act on is one nobody looks at.
+        blockers.append(
+            "verify instrument reference data against the exchange circular: "
+            + ", ".join(sorted(unverified))
+        )
     if not known_years:
         blockers.append("discover the exchange holiday calendar: python tasks.py holidays")
     if not any(s.enabled for s in cfg.sources.sources):
         blockers.append("enable at least one news source (and record its ToS)")
-    if any(s.source.startswith("TODO") for s in cfg.costs.schedules):
-        blockers.append("replace placeholder cost rates with real statutory rates")
+    if todo_costs := [s for s in cfg.costs.schedules if s.source.startswith("TODO")]:
+        # The current schedule is real (Angel's own breakup, 2026-08-30). What
+        # is still a placeholder is history, and the backtest runs from 2016 -
+        # so this stays a blocker, but it should say which years are guessed
+        # rather than imply today's rates are made up.
+        dates = ", ".join(str(s.effective_from) for s in todo_costs)
+        blockers.append(f"cost rates are still placeholders for: {dates}")
     if _docker() is None:
         blockers.append("install Docker Desktop")
     captured = [p for p in (ROOT / "data").rglob("*") if p.is_file() and p.name != ".gitkeep"]
@@ -492,4 +532,6 @@ if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         print(__doc__)
         sys.exit(1)
-    COMMANDS[sys.argv[1]]()
+    # `or 0` because most commands return None. Discarding this return
+    # value is what let `verify` report success for the life of the file.
+    sys.exit(COMMANDS[sys.argv[1]]() or 0)
