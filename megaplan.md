@@ -2496,43 +2496,54 @@ Sprints are two weeks. Gate references are `docs/gates.md`.
 
 Update this table at the end of every sprint. It is the honest picture.
 
-| Layer | Modules | ☑ Verified | ◐ In progress | ☐ Not started |
-|---|---:|---:|---:|---:|
-| L0 Foundation | 7 | 7 | 0 | 0 |
-| L1 Market Data | 11 | 11 | 0 | 0 |
-| L2 News & Events | 10 | 3 | 1 | 6 |
-| L3 Impact | 6 | 5 | 0 | 1 |
-| L4 Features | 6 | 4 | 1 | 1 |
-| L5 Models | 12 | 9 | 1 | 2 |
-| L6 Projection | 3 | 3 | 0 | 0 |
-| L7 Decision | 8 | 7 | 0 | 1 |
-| L8 Execution | 6 | 5 | 0 | 1 |
-| L9 Surface | 6 | 5 | 1 | 0 |
-| LX Ops | 6 | 6 | 0 | 0 |
-| **Total** | **81** | **65** | **4** | **12** |
+| Layer | Modules | ☑ Verified | ◐ In progress | ☐ Not started | ⊘ Deferred |
+|---|---:|---:|---:|---:|---:|
+| L0 Foundation | 7 | 7 | 0 | 0 | 0 |
+| L1 Market Data | 10 | 10 | 0 | 0 | 0 |
+| L2 News & Events | 10 | 3 | 2 | 5 | 0 |
+| L3 Impact | 6 | 5 | 0 | 1 | 0 |
+| L4 Features | 6 | 4 | 1 | 1 | 0 |
+| L5 Models | 11 | 8 | 1 | 1 | 1 |
+| L6 Projection | 4 | 4 | 0 | 0 | 0 |
+| L7 Decision | 8 | 7 | 0 | 1 | 0 |
+| L8 Execution | 6 | 5 | 0 | 1 | 0 |
+| L9 Surface | 6 | 5 | 1 | 0 | 0 |
+| LX Ops | 6 | 6 | 0 | 0 | 0 |
+| **Total** | **80** | **64** | **5** | **10** | **1** |
 
-*Counts regenerated from the module rows above, not maintained by hand. They had
-drifted badly: the table read 49/81 while claiming L6 Projection was 0/3 and L8
-Execution 0/6, when all three projection modules and five of six execution
-modules were finished and verified. A progress table that is edited separately
-from the thing it describes stops being a measurement.*
+*Counts regenerated from the module rows above by parsing them, not maintained
+by hand. They had drifted badly once before: the table read 49/81 while claiming
+L6 Projection was 0/3 and L8 Execution 0/6, when all three projection modules
+and five of six execution modules were finished and verified.*
+
+***And they had drifted again by 2026-08-30, in exactly the way that note warns
+about.*** *The table claimed 81 modules with L1 at 11 and L5 at 12. Parsing the
+rows gives L1 = M10..M19 (ten) and L5 = M50..M59 plus M5A (eleven), so the real
+figure before M63 was added was **79**, not 81. `CLAUDE.md` still says 81 and is
+wrong by the same two. A progress table edited separately from the thing it
+describes stops being a measurement, and writing that down did not stop it
+happening a second time - only regenerating it did.*
+
+*⊘ is its own column now rather than being folded into "not started". M58
+(sequence models) is deferred until M53 is beaten, which is a decision that was
+taken, not work that has not begun.*
 
 ### What the module count does not say
 
-**64 of 81 is 79%, and read alone it is misleading in both directions.**
+**64 of 80 is 80%, and read alone it is misleading in both directions.**
 
 *It understates the foundation.* L0 and L1 are finished, and they are the layers
 everything else stands on: point-in-time correctness, deterministic replay, a
-leak-free CV harness, quality gates. L5 at 9/12 includes the whole measurement
+leak-free CV harness, quality gates. L5 at 8/11 includes the whole measurement
 apparatus - calibration, conformal intervals, the trial log, null tests for every
 fitted component.
 
-*It overstates the distance travelled.* News & Events is 2/10 and the eight that
-remain are real work rather than plumbing. The remaining 17 modules are not
+*It overstates the distance travelled.* News & Events is 3/10 and the seven that
+remain are real work rather than plumbing. The remaining 16 modules are not
 evenly sized and are not evenly hard.
 
-*And it says almost nothing about the only question that matters.* Of the 81
-modules, **9 have ever consumed real market data**:
+*And it says almost nothing about the only question that matters.* Of the 80
+modules, **ten entries below have ever consumed real market data**:
 
 | | |
 |---|---|
@@ -2545,20 +2556,21 @@ modules, **9 have ever consumed real market data**:
 | M55 | volatility model - measured on ten years of real NIFTY bars and **does not beat HAR-RV** (+0.0% Parkinson, -0.1% Garman-Klass). Trial 22. |
 | M54 | quantile heads - **does not beat their own Gaussian fallback** on pinball (-2.2% at 1d, -1.3% at 5d), and both under-cover: a 90% band holds 83-85%. Trial 23. |
 | M53 | direction model - **does not beat the rules baseline**; log-loss CI [-0.0007, +0.0090] straddles zero, and its own discrimination gate refused in 4 folds of 4. Trial 24. |
+| M63 | dealer gamma positioning, on 322 real bhavcopy sessions - **not a finding**: Spearman +0.117 against the HAR residual, permutation p = 0.189 on 128 scored sessions. Days-to-expiry alone scores -0.243 on the same target, with no chain data at all. Trial 30. |
 
-That is **11%**, and the last four entries show why the count is a weak
-measure - all four are negatives. M70 found that 36.9% of the marks it was
+That is **12%**, and the last five entries show why the count is a weak
+measure - all five are negatives. M70 found that 36.9% of the marks it was
 given price a negative butterfly before any model touches them. M55 did not beat
 HAR-RV, its own residual booster declining to be kept in three of four folds.
 M54 did not beat its own Gaussian fallback on pinball.
 
-Consuming real data and being validated on it are different events. Nine
-modules have done the first; **four models have now attempted the second and all
-four lost** - M35 by 2.4% to a one-variable baseline, M55 by 0.1% to a
-three-term one, M54 by 2.2% to `sigma * z_alpha`, and M53 to a rules baseline
-that is itself indistinguishable from a coin flip.
+Consuming real data and being validated on it are different events. Ten entries
+have done the first; **five models have now attempted the second and all five
+lost** - M35 by 2.4% to a one-variable baseline, M55 by 0.1% to a three-term
+one, M54 by 2.2% to `sigma * z_alpha`, M53 to a rules baseline that is itself
+indistinguishable from a coin flip, and M63 to the calendar.
 
-*Three of the four declined themselves before any external metric was computed.*
+*Three of the five declined themselves before any external metric was computed.*
 M55's residual booster refused to be kept in three folds of four; M54's heads
 sat inside the true tails; M53's discrimination gate refused to calibrate in
 four folds of four. The guards are not decoration - they reach the same verdict

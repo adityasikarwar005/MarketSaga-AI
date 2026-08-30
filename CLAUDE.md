@@ -62,7 +62,7 @@ python jobs/weekly_report.py --week-ending YYYY-MM-DD --report
 
 ## Where the plan lives
 
-- **`megaplan.md`** — 81 modules (M00…MA5), each with a contract and a **Verify** command. Contains the sprint build order, the per-layer progress table, and an honest snapshot of what the module count does *not* say. **Update the tracker table when a module completes** — regenerate the per-layer counts from the module rows rather than editing them by hand.
+- **`megaplan.md`** — 80 modules (M00…MA5), each with a contract and a **Verify** command. Contains the sprint build order, the per-layer progress table, and an honest snapshot of what the module count does *not* say. **Update the tracker table when a module completes** — regenerate the per-layer counts from the module rows rather than editing them by hand.
 - **`docs/gates.md`** — the phase gate ledger. Gate results are recorded here whether or not they pass.
 - **`docs/model_audit.md`** — the running record of every defect found, why it was invisible, and the design rationale behind each fix. Read this before changing anything in `ms_models`, `ms_options` or `ms_risk`; several decisions that look arbitrary are load-bearing and this file says why.
 - **`docs/pdf/marketsage_master_plan.pdf`** — the 69-page blueprint. Chapter 12 carries the risk-limit table and the ten stress scenarios.
