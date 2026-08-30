@@ -25,7 +25,14 @@ from libs.ms_core.bus import InMemoryBus, Topic
 from libs.ms_core.clock import Clock, RealClock, SessionCalendar, SimClock
 from libs.ms_core.obs import METRICS, configure, get_logger, stage, trace
 from libs.ms_data.candles import CandleBuilder, verify_session
-from libs.ms_data.chain import ChainBuilder, ChainSpec, build_registry_from_specs, check_chain
+from libs.ms_data.chain import (
+    ChainBuilder,
+    ChainSpec,
+    OptionInstrument,
+    OptionRegistry,
+    build_registry_from_specs,
+    check_chain,
+)
 from libs.ms_data.feed import FeedHealth, MarketFeed, SyntheticFeed, SyntheticInstrument
 from libs.ms_data.holidays import HolidayStore, describe_day, next_holiday
 from libs.ms_data.recorder import DATA_ROOT, Recorder
@@ -72,6 +79,81 @@ def build_kite_feed(clock: Clock) -> MarketFeed:
     return feed
 
 
+# Angel quotes an index on the cash segment and its options on the F&O segment.
+# ChainBuilder needs both from one stream: a spot joined afterwards carries a lag
+# that cannot be undone and reads as edge in every options backtest.
+ANGEL_INDEX_SEGMENT = "NSE_CM"
+ANGEL_OPTION_SEGMENT = "NFO"
+
+
+def build_angel_chain(
+    args: argparse.Namespace, calendar: SessionCalendar, clock: Clock, master=None
+):
+    """Chain builder and token plan, from the real Angel scrip master.
+
+    Returns ``(builder, index_token, option_tokens)``. Unlike the synthetic path
+    this invents no instrument ids: every id here is the vendor's own token,
+    which is what its ticks will arrive stamped with.
+    """
+    from libs.ms_data.angelone import load_scrip_master
+
+    # Injected in tests. A default of "download it" is right for the service and
+    # wrong for a test, which would then need a network and today's publication.
+    if master is None:
+        master = load_scrip_master(clock)
+    today = calendar.local(clock.now()).date()
+
+    index = master.resolve(args.chain_name, as_of=today)
+    rows = master.option_contracts(
+        args.chain_name, as_of=today, n_expiries=args.n_expiries, exch_seg=ANGEL_OPTION_SEGMENT
+    )
+    contracts = []
+    for r in rows:
+        right = r.opt_type
+        if right is None or r.expiry is None:
+            continue
+        contracts.append(
+            OptionInstrument(
+                instrument_id=r.token,
+                underlying_id=index.token,
+                expiry=r.expiry,
+                strike=r.strike,
+                opt_type=right,
+            )
+        )
+    registry = OptionRegistry(contracts)
+    spec = ChainSpec(
+        underlying_id=index.token,
+        n_expiries=args.n_expiries,
+        strikes_per_side=args.strikes_per_side,
+        snapshot_seconds=args.chain_seconds,
+    )
+    builder = ChainBuilder(spec, registry, calendar)
+    expiries = sorted({c.expiry for c in contracts})
+    print(
+        f"  chain: {args.chain_name} index token {index.token}, {len(contracts)} contracts, "
+        f"{len(expiries)} expiries ({', '.join(str(e) for e in expiries)}), "
+        f"+/-{spec.strikes_per_side} strikes at snapshot, every {spec.snapshot_seconds:g}s"
+    )
+    return builder, index.token, [c.instrument_id for c in contracts]
+
+
+def build_angel_feed(clock: Clock, *, index_token: int, option_tokens: list[int]) -> MarketFeed:
+    from libs.ms_data.angelone import AngelCredentials, AngelOneFeed, login
+
+    envmod.require_broker_credentials()
+    creds = AngelCredentials.from_env()
+    session = login(creds, clock)
+    feed = AngelOneFeed(session, creds.api_key, exchange=ANGEL_INDEX_SEGMENT)
+    feed.subscribe_on(ANGEL_INDEX_SEGMENT, [index_token])
+    feed.subscribe_on("NSE_FO", option_tokens)
+    log.info(
+        "angel session ready",
+        fields={"client": session.client_code, "tokens": len(option_tokens) + 1},
+    )
+    return feed
+
+
 def run(args: argparse.Namespace) -> int:
     configure()
     cfg = cfgmod.load(warn=True)
@@ -86,12 +168,26 @@ def run(args: argparse.Namespace) -> int:
         clock: Clock = SimClock(_synthetic_start(calendar, args))
         feed: MarketFeed = build_synthetic_feed(calendar, clock, args.seed)  # type: ignore[arg-type]
         end = clock.now() + timedelta(minutes=args.minutes)
+    elif args.source == "angel":
+        clock = RealClock()
+        end = None
     else:
         clock = RealClock()
         feed = build_kite_feed(clock)
         end = None
 
-    chain_builder, chain_feed = _build_chain(args, calendar, clock)
+    if args.source == "angel":
+        # The registry is built before the feed, not after: its tokens are what
+        # the subscription is made of, and they come from the vendor's master
+        # rather than being invented the way the synthetic path can afford to.
+        if not args.chain:
+            return _refuse_angel_without_chain()
+        chain_builder, index_token, option_tokens = build_angel_chain(args, calendar, clock)
+        chain_feed = None
+        feed = build_angel_feed(clock, index_token=index_token, option_tokens=option_tokens)
+        args.chain_underlying = index_token
+    else:
+        chain_builder, chain_feed = _build_chain(args, calendar, clock)
 
     bus = InMemoryBus(max_len=1_000_000)
     builder = CandleBuilder(calendar)
@@ -200,6 +296,21 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _refuse_angel_without_chain() -> int:
+    """The one combination that would waste a session.
+
+    Ticks alone can be replayed into candles later; a chain snapshot cannot be
+    reconstructed from them, because the book at a given instant is not in the
+    tick stream once the instant has passed. Running the live feed without
+    --chain spends a morning collecting the recoverable half.
+    """
+    print("  refusing: --source angel without --chain.")
+    print("  The chain is the part that cannot be rebuilt afterwards - a bhavcopy")
+    print("  gives daily settlement marks and no book, which is why M70 cannot be")
+    print("  validated from the archive. Add --chain.")
+    return 2
+
+
 def _build_chain(args, calendar, clock):
     """Wire up the chain snapshotter (M14).
 
@@ -263,7 +374,7 @@ def _synthetic_start(calendar: SessionCalendar, args: argparse.Namespace):
 
 def main() -> int:
     p = argparse.ArgumentParser(description="MarketSage market data ingest (M11 + M12 + M13)")
-    p.add_argument("--source", choices=("synthetic", "kite"), default="synthetic")
+    p.add_argument("--source", choices=("synthetic", "kite", "angel"), default="synthetic")
     p.add_argument("--minutes", type=int, default=30, help="synthetic only: session length")
     p.add_argument("--date", help="synthetic only: session date (YYYY-MM-DD)")
     p.add_argument("--seed", type=int, default=20260826)
@@ -273,6 +384,8 @@ def main() -> int:
     p.add_argument("--chain-spot", type=float, default=24_800.0, help="strike ladder centre")
     p.add_argument("--chain-seconds", type=float, default=5.0, help="snapshot cadence")
     p.add_argument("--strikes-per-side", type=int, default=15)
+    p.add_argument("--chain-name", default="NIFTY", help="angel only: underlying name")
+    p.add_argument("--n-expiries", type=int, default=2, help="angel only: expiries to subscribe")
     p.add_argument("--verify", action="store_true", help="print the session candle report")
     p.add_argument("--metrics", action="store_true", help="print stage latencies on exit")
     return run(p.parse_args())

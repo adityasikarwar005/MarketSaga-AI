@@ -64,7 +64,7 @@ from typing import Any
 from libs.ms_core import env as envmod
 from libs.ms_core.clock import UTC, Clock
 from libs.ms_core.obs import METRICS, get_logger
-from libs.ms_core.schemas import Tick
+from libs.ms_core.schemas import OptionType, Tick
 from libs.ms_data.feed import MarketFeed
 
 log = get_logger(__name__)
@@ -473,6 +473,23 @@ class ScripRow:
     strike: float
     lot_size: int
 
+    @property
+    def opt_type(self) -> OptionType | None:
+        """CE or PE, or None when this row is not an option.
+
+        Angel does not carry the right in a field of its own - it is the last
+        two characters of the contract symbol. ``instrument_type`` says OPTIDX
+        for both sides, so it cannot answer this.
+        """
+        if not self.instrument_type.startswith("OPT"):
+            return None
+        tail = self.symbol.strip().upper()[-2:]
+        if tail == "CE":
+            return OptionType.CE
+        if tail == "PE":
+            return OptionType.PE
+        return None
+
 
 @dataclass
 class InstrumentMaster:
@@ -509,6 +526,49 @@ class InstrumentMaster:
                 )
             )
         return InstrumentMaster(rows=rows, fetched_on=fetched_on)
+
+    def option_contracts(
+        self,
+        name: str,
+        *,
+        as_of: date,
+        n_expiries: int = 2,
+        exch_seg: str = "NFO",
+    ) -> list[ScripRow]:
+        """Live option contracts for one underlying, nearest expiries first.
+
+        Selects on ``name`` rather than ``symbol`` because an option's symbol is
+        the whole contract - ``NIFTY29DEC2623000CE`` - while ``name`` is the
+        underlying it settles against.
+
+        ``as_of`` has no default for the same reason :meth:`resolve` has none. A
+        default would be today, and a registry built with today's expiries then
+        used to interpret a past session attributes ticks to contracts that had
+        not been listed yet. Contracts expiring before ``as_of`` are excluded:
+        they are not tradable and their tokens get reused.
+        """
+        rows = [
+            r
+            for r in self.rows
+            if r.name == name
+            and r.exch_seg == exch_seg
+            and r.instrument_type.startswith("OPT")
+            and r.expiry is not None
+            and r.expiry >= as_of
+        ]
+        if not rows:
+            raise KeyError(
+                f"no live {exch_seg} option contracts named {name!r} on or after "
+                f"{as_of} in a master fetched {self.fetched_on}. Subscribing to "
+                "an empty set produces a feed that is silent rather than one "
+                "that errors."
+            )
+        expiries = sorted({r.expiry for r in rows if r.expiry})[:n_expiries]
+        keep = {e for e in expiries}
+        return sorted(
+            (r for r in rows if r.expiry in keep),
+            key=lambda r: (r.expiry or date.max, r.strike, r.symbol),
+        )
 
     def resolve(self, symbol: str, *, as_of: date) -> ScripRow:
         """Token for ``symbol``, valid on ``as_of``.
@@ -725,7 +785,11 @@ class AngelOneFeed(MarketFeed):
         self._mode = mode
         self._socket_factory = socket_factory
         self._queue: Queue[Tick] = Queue(maxsize=queue_maxsize)
-        self._subscribed: list[int] = []
+        # Keyed by exchange segment. The spot and its options do not live on
+        # the same one - NIFTY is NSE_CM and its contracts are NSE_FO - and a
+        # chain snapshot must carry both from one stream, because a spot
+        # joined afterwards drags in a lag that reads as edge later.
+        self._subscribed: dict[str, list[int]] = {}
         self._socket: Any | None = None
         self._closed = False
         self.decode_errors = 0
@@ -795,10 +859,26 @@ class AngelOneFeed(MarketFeed):
                 METRICS.inc("feed_tick_total", source=self.name)
 
     def subscribe(self, instrument_ids: Sequence[int]) -> None:
-        new = [i for i in dict.fromkeys(instrument_ids) if i not in self._subscribed]
+        """Subscribe on this feed's default exchange."""
+        self.subscribe_on(self._exchange, instrument_ids)
+
+    def subscribe_on(self, exchange: str, instrument_ids: Sequence[int]) -> None:
+        """Subscribe tokens on a named exchange segment.
+
+        Separate from :meth:`subscribe` because one feed legitimately spans two
+        segments: an index quotes on NSE_CM while every option on it quotes on
+        NSE_FO. Sending them under one exchangeType is accepted by the API and
+        then yields nothing for the tokens that do not belong there - a silence
+        indistinguishable from a closed market.
+        """
+        if exchange not in EXCHANGE_TYPE:
+            raise KeyError(f"unknown exchange {exchange!r}; known: {sorted(EXCHANGE_TYPE)}")
+        held = self._subscribed.setdefault(exchange, [])
+        already = {i for ids in self._subscribed.values() for i in ids}
+        new = [i for i in dict.fromkeys(instrument_ids) if i not in already]
         if not new:
             return
-        total = len(self._subscribed) + len(new)
+        total = len(already) + len(new)
         if total > self.max_instruments:
             raise ValueError(
                 f"{total} instruments requested but the budget is "
@@ -807,27 +887,27 @@ class AngelOneFeed(MarketFeed):
                 "an expiry - do not silently truncate, a chain that stops updating "
                 "halfway through the morning looks like a quiet market."
             )
-        self._subscribed.extend(new)
+        held.extend(new)
         if self._socket is not None:
-            self._push_subscription(new)
+            self._push_subscription({exchange: new})
 
-    def _push_subscription(self, tokens: Sequence[int]) -> None:
+    def _push_subscription(self, by_exchange: dict[str, list[int]]) -> None:
         assert self._socket is not None
-        chunks = [
-            tokens[i : i + ANGEL_MAX_TOKENS_PER_REQUEST]
-            for i in range(0, len(tokens), ANGEL_MAX_TOKENS_PER_REQUEST)
-        ]
-        for n, chunk in enumerate(chunks):
-            self._socket.subscribe(
-                f"{self.name}-{n}",
-                self._mode,
-                [
-                    {
-                        "exchangeType": EXCHANGE_TYPE[self._exchange],
-                        "tokens": [str(t) for t in chunk],
-                    }
-                ],
-            )
+        n = 0
+        for exchange, tokens in by_exchange.items():
+            for i in range(0, len(tokens), ANGEL_MAX_TOKENS_PER_REQUEST):
+                chunk = tokens[i : i + ANGEL_MAX_TOKENS_PER_REQUEST]
+                self._socket.subscribe(
+                    f"{self.name}-{n}",
+                    self._mode,
+                    [
+                        {
+                            "exchangeType": EXCHANGE_TYPE[exchange],
+                            "tokens": [str(t) for t in chunk],
+                        }
+                    ],
+                )
+                n += 1
 
     def connect(self) -> None:
         if self._socket is not None:

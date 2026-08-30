@@ -13,6 +13,7 @@ Each has a test that fails if the guard is removed.
 
 from __future__ import annotations
 
+import argparse
 import json
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -22,8 +23,10 @@ from typing import ClassVar
 
 import pytest
 
+from libs.ms_core import config as cfgmod
 from libs.ms_core import env as envmod
 from libs.ms_core.clock import SimClock
+from libs.ms_core.schemas import OptionType
 from libs.ms_data.angelone import (
     ANGEL_MAX_TOKENS_PER_REQUEST,
     EXCHANGE_TYPE,
@@ -666,3 +669,215 @@ class TestStrikeScale:
             fetched_on=date(2026, 8, 28),
         )
         assert m.rows[0].strike == 0.0
+
+
+def _opt_row(
+    symbol: str,
+    expiry: str,
+    strike: str,
+    *,
+    name: str = "NIFTY",
+    seg: str = "NFO",
+    itype: str = "OPTIDX",
+    token: str = "1",
+) -> dict[str, str]:
+    return {
+        "token": token,
+        "symbol": symbol,
+        "name": name,
+        "exch_seg": seg,
+        "instrumenttype": itype,
+        "expiry": expiry,
+        "strike": strike,
+        "lotsize": "75",
+    }
+
+
+class TestOptionContracts:
+    """Selecting the slice of the chain a live subscription will carry.
+
+    The registry built from this decides what every tick is attributed to, so
+    the failure modes are attribution failures, not lookup failures.
+    """
+
+    PAYLOAD: ClassVar[list[dict[str, str]]] = [
+        _opt_row("NIFTY01SEP2624000CE", "01SEP2026", "2400000", token="101"),
+        _opt_row("NIFTY01SEP2624000PE", "01SEP2026", "2400000", token="102"),
+        _opt_row("NIFTY08SEP2624000CE", "08SEP2026", "2400000", token="103"),
+        _opt_row("NIFTY15SEP2624000CE", "15SEP2026", "2400000", token="104"),
+        _opt_row("NIFTY25AUG2624000CE", "25AUG2026", "2400000", token="105"),
+        # same name, different segment - a currency option on a like-named index
+        _opt_row(
+            "NIFTY01SEP2624000CE", "01SEP2026", "9725000", seg="CDS", itype="OPTCUR", token="106"
+        ),
+        # the underlying itself: no expiry, not an option
+        {
+            "token": "26000",
+            "symbol": "NIFTY",
+            "name": "NIFTY",
+            "exch_seg": "NSE",
+            "instrumenttype": "",
+            "expiry": "",
+            "strike": "-1.000000",
+            "lotsize": "1",
+        },
+    ]
+
+    def _master(self) -> InstrumentMaster:
+        return InstrumentMaster.from_payload(self.PAYLOAD, fetched_on=date(2026, 8, 30))
+
+    def test_only_the_nearest_expiries_are_returned(self) -> None:
+        rows = self._master().option_contracts("NIFTY", as_of=date(2026, 8, 30), n_expiries=2)
+        assert sorted({r.expiry for r in rows}) == [date(2026, 9, 1), date(2026, 9, 8)]
+
+    def test_expired_contracts_are_excluded(self) -> None:
+        """Their tokens get reused. A tick attributed to a contract that stopped
+        trading is not a missing tick - it is a wrong one."""
+        rows = self._master().option_contracts("NIFTY", as_of=date(2026, 8, 30), n_expiries=9)
+        assert all(r.expiry is not None and r.expiry >= date(2026, 8, 30) for r in rows)
+        assert "NIFTY25AUG2624000CE" not in {r.symbol for r in rows}
+
+    def test_a_different_segment_is_not_swept_in(self) -> None:
+        """CDS carries its own OPTCUR contracts under names that collide."""
+        rows = self._master().option_contracts("NIFTY", as_of=date(2026, 8, 30), n_expiries=9)
+        assert all(r.exch_seg == "NFO" for r in rows)
+
+    def test_the_underlying_row_is_not_an_option(self) -> None:
+        rows = self._master().option_contracts("NIFTY", as_of=date(2026, 8, 30), n_expiries=9)
+        assert 26000 not in {r.token for r in rows}
+
+    def test_an_empty_selection_raises_rather_than_returning_nothing(self) -> None:
+        """A silent feed and an empty subscription look identical downstream."""
+        with pytest.raises(KeyError, match="no live"):
+            self._master().option_contracts("BANKNIFTY", as_of=date(2026, 8, 30))
+
+    def test_as_of_has_no_default(self) -> None:
+        """A default would be today, and a registry built with today's expiries
+        then pointed at a past session attributes ticks to contracts that were
+        not listed yet."""
+        with pytest.raises(TypeError):
+            self._master().option_contracts("NIFTY")  # type: ignore[call-arg]
+
+
+class TestOptType:
+    def test_the_right_comes_from_the_symbol_suffix(self) -> None:
+        """instrumenttype says OPTIDX for both sides, so it cannot answer this."""
+        m = InstrumentMaster.from_payload(
+            [
+                _opt_row("NIFTY01SEP2624000CE", "01SEP2026", "2400000", token="1"),
+                _opt_row("NIFTY01SEP2624000PE", "01SEP2026", "2400000", token="2"),
+            ],
+            fetched_on=date(2026, 8, 30),
+        )
+        by_token = {r.token: r.opt_type for r in m.rows}
+        assert by_token[1] is OptionType.CE
+        assert by_token[2] is OptionType.PE
+
+    def test_a_non_option_row_has_no_right(self) -> None:
+        m = InstrumentMaster.from_payload(
+            [
+                {
+                    "token": "26000",
+                    "symbol": "NIFTY",
+                    "name": "NIFTY",
+                    "exch_seg": "NSE",
+                    "instrumenttype": "",
+                    "expiry": "",
+                    "strike": "-1.000000",
+                    "lotsize": "1",
+                }
+            ],
+            fetched_on=date(2026, 8, 30),
+        )
+        assert m.rows[0].opt_type is None
+
+
+class TestTwoExchangeSubscription:
+    """A chain snapshot needs the spot and the options from one stream.
+
+    NIFTY quotes on NSE_CM; every option on it quotes on NSE_FO. Sending both
+    under a single exchangeType is accepted at subscribe time and then delivers
+    nothing for the tokens that do not belong there, which is a silence
+    indistinguishable from a closed market.
+    """
+
+    def test_each_segment_gets_its_own_payload_entry(self) -> None:
+        f, made = _feed()
+        f.subscribe_on("NSE_FO", [43001, 51002])
+        f.subscribe_on("NSE_CM", [26000])
+        f.connect()
+        sent = {
+            payload[0]["exchangeType"]: payload[0]["tokens"]
+            for _mode, payload in made[0].subscriptions
+        }
+        assert sent[EXCHANGE_TYPE["NSE_FO"]] == ["43001", "51002"]
+        assert sent[EXCHANGE_TYPE["NSE_CM"]] == ["26000"]
+
+    def test_the_budget_counts_across_segments(self) -> None:
+        """Two segments are two halves of one connection budget, not two budgets."""
+        f, _ = _feed()
+        f.subscribe_on("NSE_FO", list(range(1, f.max_instruments)))
+        with pytest.raises(ValueError, match="budget"):
+            f.subscribe_on("NSE_CM", [900_001, 900_002])
+
+    def test_a_token_already_held_elsewhere_is_not_resubscribed(self) -> None:
+        f, made = _feed()
+        f.subscribe_on("NSE_FO", [26000])
+        f.subscribe_on("NSE_CM", [26000])
+        f.connect()
+        tokens = [t for _m, payload in made[0].subscriptions for t in payload[0]["tokens"]]
+        assert tokens.count("26000") == 1
+
+    def test_an_unknown_segment_is_refused(self) -> None:
+        f, _ = _feed()
+        with pytest.raises(KeyError, match="unknown exchange"):
+            f.subscribe_on("NSE_XX", [26000])
+
+
+class TestAngelChainWiring:
+    """Scrip rows to the registry the ChainBuilder attributes ticks with.
+
+    Every id here is Angel's own token, because that is what its ticks arrive
+    stamped with. An invented id would attribute real quotes to a contract that
+    does not exist, and the snapshot would look entirely normal.
+    """
+
+    def _args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            chain_name="NIFTY", n_expiries=2, strikes_per_side=15, chain_seconds=5.0
+        )
+
+    def _master(self) -> InstrumentMaster:
+        return InstrumentMaster.from_payload(
+            TestOptionContracts.PAYLOAD, fetched_on=date(2026, 8, 30)
+        )
+
+    def test_tokens_and_terms_survive_the_mapping(self) -> None:
+        from libs.ms_core.clock import SessionCalendar
+        from services.ingest_market.__main__ import build_angel_chain
+
+        cal = SessionCalendar.from_config(cfgmod.load(warn=False).sessions)
+        clock = SimClock(datetime(2026, 8, 30, 4, 0, tzinfo=UTC))
+        _builder, index_token, option_tokens = build_angel_chain(
+            self._args(), cal, clock, master=self._master()
+        )
+        assert index_token == 26000, "the underlying must be the index, not an option"
+        assert sorted(option_tokens) == [101, 102, 103]
+        assert 106 not in option_tokens, "the CDS contract is a different instrument"
+        assert 105 not in option_tokens, "that contract had already expired"
+
+    def test_the_registry_carries_the_right_and_the_strike(self) -> None:
+        from libs.ms_core.clock import SessionCalendar
+        from services.ingest_market.__main__ import build_angel_chain
+
+        cal = SessionCalendar.from_config(cfgmod.load(warn=False).sessions)
+        clock = SimClock(datetime(2026, 8, 30, 4, 0, tzinfo=UTC))
+        builder, _idx, _toks = build_angel_chain(self._args(), cal, clock, master=self._master())
+        reg = builder._registry
+        ce = reg.get(101)
+        pe = reg.get(102)
+        assert ce is not None and pe is not None
+        assert ce.opt_type is OptionType.CE and pe.opt_type is OptionType.PE
+        assert ce.strike == pytest.approx(24_000.0), "strike must be out of paise"
+        assert ce.expiry == date(2026, 9, 1)
+        assert ce.underlying_id == 26000
