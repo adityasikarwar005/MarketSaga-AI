@@ -1828,7 +1828,10 @@ demonstrably bought, so the job now says both.
 
 **The number that matters more than either model.** A 90% band that holds the
 outcome 83.4% of the time is not a 90% band. Both models under-cover, at both
-horizons, by 5-10 points:
+horizons, by 5-10 points **under this walk-forward** - and that qualifier was
+missing when this was written. A later single-split run put the same heads at
+89.9% and 92.6%; see "Conformal calibration" below. The numbers here are real
+and they are conditional on the split:
 
     nominal 90%   ->   heads 85.4% / 83.4%,   Gaussian 82.7% / 80.2%
 
@@ -2074,3 +2077,57 @@ now paces chunked requests, and the pacing is deliberately **not** a retry: the
 block never says stop, so a retry loop would keep firing at silence. The
 measurement is in the constant's comment so the next person does not have to
 rediscover it by getting blocked.
+
+## Conformal calibration, and the finding that the under-coverage moves with the split
+
+M54's bands were measured at 83-85% against a nominal 90%, and M75 sizes 1.09x
+to 11.38x too large as a result. The obvious response - widen until coverage
+reaches 90% - reports a pass on the data it was tuned on, so the correction was
+built as split conformal instead: fit on block one, choose the scale on block
+two, measure on block three.
+
+**It worked, and then it turned out there was nothing to fix on that split.**
+
+| | walk-forward (`eval_quantiles`) | single split (`eval_conformal`) |
+|---|---|---|
+| horizon 1 | 85.4% | **89.9%** |
+| horizon 5 | 83.4% | **92.6%** |
+
+Same series, same model, same nominal. Under a four-fold walk-forward the bands
+are short; under a 50/25/25 chronological split they are at nominal on one
+horizon and *over*-covering on the other. Trials 25 and 26.
+
+The difference is training size. The walk-forward's first fold fits on 500 rows
+and predicts the next 486; the single split fits on 1,222 before predicting
+anything. So a meaningful part of what was reported as a calibration defect is a
+small-sample effect, and **"the coverage of M54" is not a number that exists** -
+it is a number per split, and the earlier write-up should have said so.
+
+That is a correction to this document, not to the model. The M54 entry above
+reports 83-85% without qualifying it, and the sizing consequence computed from
+it inherits the same conditioning.
+
+**What conformal actually demonstrated.** On a split where the band was already
+right, a scale of x1.070 moved coverage from 89.9% to 91.2% and cost 7% of
+width. That is not a fix; it is the method declining to break something. The job
+now says exactly that, because the first version printed "the correction holds
+out of sample" while the raw band underneath it was already at nominal - the
+verdict was true and the sentence was misleading.
+
+**The problem a single scale cannot touch.** At horizon 5 the regime split is
+quiet 98.0%, busy 88.1% - a 9.9-point gap that conformal leaves at 9.9. One
+global multiplier moves both terciles together by construction. This is the
+shape M54's own audit already recorded (97.1% quiet, 84.6% busy averaging to
+something that read as calibrated), and it is the part that matters for sizing:
+the busy tercile is where the tail arrives and where a short band is expensive.
+
+Conditional coverage needs a scale that varies with the regime - Mondrian
+conformal on volatility buckets, or a normalised conformity score. That is a
+design decision with its own justification and is not made here.
+
+**A float bug the tests caught on the way.** `(1.0 - 0.9) / 2` is
+`0.04999999999999999`, and a forecast keyed on `0.05` does not contain it, so
+deriving quantile-lookup keys by arithmetic raised on every forecast. Levels are
+now matched to the nearest existing key within a tolerance, with a test that
+pins both the proximity match and its refusal to match something genuinely
+absent.
