@@ -199,6 +199,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M60** | Path sampler | L6 | P6 | M55, M54 | ✅ | ☑ |
 | **M61** | Fan-chart producer | L6 | P6 | M60 | ✅ | ☑ |
 | **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | ✅ | ☑ |
+| **M63** | Dealer gamma positioning (OI by strike, cycle-adjusted) | L6 | P6 | M14 | ✅ | ☑ |
 | **M70** | IV surface fitter | L7 | P7 | M14 | ✅ | ☑ |
 | **M71** | Greeks engine | L7 | P7 | M70 | ✅ | ☑ |
 | **M72** | Structure enumerator & liquidity filter | L7 | P7 | M71 | ✅ | ☑ |
@@ -258,6 +259,28 @@ pre-commit run --all-files            # exits 0
 ```
 **Done:** clean machine → clone → `make up` → smoke test green in under 5 minutes.
 **Traps:** don't add Kubernetes. Don't add a web framework yet.
+
+**`tasks.py verify` could not fail (found 2026-08-30).** Every stage ran with
+`check=False`, the return codes were discarded, and the `__main__` dispatcher
+called the command without reading what it returned. `tasks.py verify` — the
+command CLAUDE.md defines as "a module is not done until this is green" —
+exited 0 whether lint failed, mypy failed, or the suite was red. It had been
+that way since the file was written, so **every green `verify` recorded in this
+plan before that date attested to nothing but the command having run.**
+
+Only GitHub Actions could go red, because it runs the same tools as separate
+steps. That is the other end of the pipeline-red-for-four-pushes note in
+CLAUDE.md, and it re-frames the ruff 0.16.4/0.16.5 incident: the version drift
+was real, but a matching ruff would not have saved that push either.
+
+Found by accident. The black pre-commit hook reformatted a file that `verify`
+had just called clean two minutes earlier, and the two answers could not both
+be true. Fixed by having each stage return its code and the dispatcher
+`sys.exit` it; `tests/unit/test_verify_reports_failure.py` pins it. The first
+version of that test's dispatcher check passed against the broken dispatcher —
+it looked for any `sys.exit` in the `__main__` block and found the usage-error
+one — which is the same defect class one level up, and is why the mutation was
+run rather than assumed.
 
 ---
 
@@ -410,6 +433,26 @@ the master reports one entry, and every earlier trade resolves to the later
 contract without anything failing. Exchange tokens get the same treatment —
 brokers recycle them — which is why stored records reference `instrument_id`,
 the one identifier that may never be reused.
+
+**Reference data, 2026-08-30.** The module was ✅ while every row in
+`config/instruments.yaml` was `verified: false` — the machinery was right and
+the numbers in it were guesses. NSE/FAOP/70616 cut NIFTY 75 → 65 and BANKNIFTY
+35 → 30 from the January 2026 series, and the config had been carrying 75 and
+15. Both are now dated entries citing the circular, cross-checked against every
+live NFO contract in Angel's scrip master.
+
+`expiry_weekday` said Thursday for NIFTY and BANKNIFTY. NSE moved index expiry
+to Tuesday: 16 of the 18 live expiries are Tuesdays and the other two are the
+Monday before a Tuesday holiday — one of which (2026-11-24) this repo's own
+holiday calendar already lists, so the correction is corroborated internally
+rather than only by the circular.
+
+Only NIFTY-FUT is `verified: true`. BANKNIFTY's lot changed more than once
+between 2020 and 2025 and this file cannot yet say when, so its **current** spec
+is sourced and its **history** is still marked TODO — which is what keeps it
+false. `tests/unit/test_instrument_provenance.py` makes that distinction
+enforceable: `verified: true` alongside a TODO source now fails, so the flag
+cannot outrun its evidence again.
 
 Expiry rolls **backwards** off a holiday, never forwards. Forwards settles a
 contract after the date printed on it, and a daily-close backtest never shows
@@ -1634,6 +1677,50 @@ python jobs/eval_projection.py --walk-forward --report
 
 ### L7 · DECISION
 
+#### M63 · Dealer gamma positioning ✅ — **measured and lost**
+**Owns:** where open interest sits relative to spot, with the expiry cycle divided out.
+
+**Why it was built.** Four models had been measured on real data and all four
+lost, and they shared a shape: each fed price history into a model and asked a
+question about price. Open interest by strike is not in the price series. It is
+direction-free, which matters because direction is what four models had failed
+to predict.
+
+**Built** `libs/ms_models/positioning.py`, `tests/ml/test_positioning_nulls.py`
+(25 tests), `jobs/eval_positioning.py`. No dealer sign is applied — the
+published GEX literature multiplies open interest by an assumed dealer position,
+that assumption is unobservable, and it does all the work.
+
+**Verify**
+```bash
+python -m pytest tests/ml/test_positioning_nulls.py -q
+python jobs/eval_positioning.py --symbol NIFTY      # reports, does not assert
+```
+
+**Result: not a finding.** Spearman against the HAR residual **+0.117**,
+permutation p **0.189**, on 128 scored test sessions out of 322 real NIFTY
+sessions. Recorded as trial 30 and in `docs/gates.md`.
+
+**What beat it: the calendar.** Days-to-expiry alone scores **−0.243** against
+the same target — stronger than the whole options-based feature, with no chain
+data at all. And the cycle adjustment leaks: the adjusted score still carries
+−0.163 of days-to-expiry, so part of the +0.117 is that same calendar arriving
+by a longer route.
+
+**Traps this module documents.** Both were live in its first draft.
+`gamma_kernel` returned 0.0 on expiry day, because days-to-expiry is 0 there and
+the guard treated that as invalid — zeroing the statistic on the one day gamma
+is largest, and flipping the headline correlation from −0.82 to +0.12 with no
+error raised. And the docstring explained the confound with the wrong mechanism:
+gamma is a density in strike and its sum over a fixed grid is *conserved* into
+expiry, so "gamma rises so the sum rises" is false. The real driver is that open
+interest is peaked at the money and the kernel narrows onto that peak — which
+matters, because the fix the wrong story suggests (divide by total open
+interest) removes the smaller confound and leaves the larger one. Full write-up
+in `docs/model_audit.md`.
+
+---
+
 #### M70 · IV surface fitter ✅
 **Tasks**
 - [x] IV from **mid** prices only (never LTP); Black-76 on futures with the right forward
@@ -1984,6 +2071,35 @@ the AP-hack case: loud, high-severity, low-credibility, shown and not acted on.
 
 Every derived number carries a tooltip saying **how it is computed**, not what
 it is called.
+
+**Layout, fixed 2026-08-30.** The workspace was visibly broken and had been
+since it was written; none of it was caught because everything above was
+checked at one window width. The chart's explanatory note was absolutely
+positioned into the same right-hand gutter the price scale draws its labels
+into, so the two printed over each other. Gridline labels collided with the
+terminal value tags. The `entry` label was clipped off the left edge. The last
+event row was sliced by the status bar.
+
+The structural cause of the worst of it was `min-height` and track sizing.
+`.workspace` was missing `min-height: 0`, so the drawer pushed past its track
+and under the status bar. In the re-flowed layouts a `minmax(0, 1fr)` track
+inside an auto-height parent resolves to zero, so a fixed-height chart panel
+overflowed and painted across the drawer - and then, one level up, `auto`
+tracks in a definite-height container came back as an even split rather than at
+their content heights, which put 543px of workspace into a 323px row. That last
+one was found by reading the computed track sizes out of the browser rather
+than by reasoning about the cascade, and the fix is `max-content`, not `auto`.
+
+The single breakpoint at 1080px `display: none`d the side panel - the panel
+holding the verdict, what blocked it, and the Kelly fraction. It now re-flows
+beneath the chart and keeps its tabs. Nothing in the responsive ladder removes
+information; below 900px the event row drops its source column and keeps the
+suppression reason, because the reason is the part that cannot be
+reconstructed afterwards.
+
+`tests/manual/dashboard_checklist.md` gained a section 8 naming each fault and
+the four widths to check, since every one of them was invisible at desktop
+width.
 
 **Still open, and marked partial for it:**
 - The **Playwright smoke test is not written**. Until it is, nothing here is
@@ -2380,43 +2496,54 @@ Sprints are two weeks. Gate references are `docs/gates.md`.
 
 Update this table at the end of every sprint. It is the honest picture.
 
-| Layer | Modules | ☑ Verified | ◐ In progress | ☐ Not started |
-|---|---:|---:|---:|---:|
-| L0 Foundation | 7 | 7 | 0 | 0 |
-| L1 Market Data | 11 | 11 | 0 | 0 |
-| L2 News & Events | 10 | 3 | 1 | 6 |
-| L3 Impact | 6 | 5 | 0 | 1 |
-| L4 Features | 6 | 4 | 1 | 1 |
-| L5 Models | 12 | 9 | 1 | 2 |
-| L6 Projection | 3 | 3 | 0 | 0 |
-| L7 Decision | 8 | 7 | 0 | 1 |
-| L8 Execution | 6 | 5 | 0 | 1 |
-| L9 Surface | 6 | 5 | 1 | 0 |
-| LX Ops | 6 | 6 | 0 | 0 |
-| **Total** | **81** | **65** | **4** | **12** |
+| Layer | Modules | ☑ Verified | ◐ In progress | ☐ Not started | ⊘ Deferred |
+|---|---:|---:|---:|---:|---:|
+| L0 Foundation | 7 | 7 | 0 | 0 | 0 |
+| L1 Market Data | 10 | 10 | 0 | 0 | 0 |
+| L2 News & Events | 10 | 3 | 2 | 5 | 0 |
+| L3 Impact | 6 | 5 | 0 | 1 | 0 |
+| L4 Features | 6 | 4 | 1 | 1 | 0 |
+| L5 Models | 11 | 8 | 1 | 1 | 1 |
+| L6 Projection | 4 | 4 | 0 | 0 | 0 |
+| L7 Decision | 8 | 7 | 0 | 1 | 0 |
+| L8 Execution | 6 | 5 | 0 | 1 | 0 |
+| L9 Surface | 6 | 5 | 1 | 0 | 0 |
+| LX Ops | 6 | 6 | 0 | 0 | 0 |
+| **Total** | **80** | **64** | **5** | **10** | **1** |
 
-*Counts regenerated from the module rows above, not maintained by hand. They had
-drifted badly: the table read 49/81 while claiming L6 Projection was 0/3 and L8
-Execution 0/6, when all three projection modules and five of six execution
-modules were finished and verified. A progress table that is edited separately
-from the thing it describes stops being a measurement.*
+*Counts regenerated from the module rows above by parsing them, not maintained
+by hand. They had drifted badly once before: the table read 49/81 while claiming
+L6 Projection was 0/3 and L8 Execution 0/6, when all three projection modules
+and five of six execution modules were finished and verified.*
+
+***And they had drifted again by 2026-08-30, in exactly the way that note warns
+about.*** *The table claimed 81 modules with L1 at 11 and L5 at 12. Parsing the
+rows gives L1 = M10..M19 (ten) and L5 = M50..M59 plus M5A (eleven), so the real
+figure before M63 was added was **79**, not 81. `CLAUDE.md` still says 81 and is
+wrong by the same two. A progress table edited separately from the thing it
+describes stops being a measurement, and writing that down did not stop it
+happening a second time - only regenerating it did.*
+
+*⊘ is its own column now rather than being folded into "not started". M58
+(sequence models) is deferred until M53 is beaten, which is a decision that was
+taken, not work that has not begun.*
 
 ### What the module count does not say
 
-**64 of 81 is 79%, and read alone it is misleading in both directions.**
+**64 of 80 is 80%, and read alone it is misleading in both directions.**
 
 *It understates the foundation.* L0 and L1 are finished, and they are the layers
 everything else stands on: point-in-time correctness, deterministic replay, a
-leak-free CV harness, quality gates. L5 at 9/12 includes the whole measurement
+leak-free CV harness, quality gates. L5 at 8/11 includes the whole measurement
 apparatus - calibration, conformal intervals, the trial log, null tests for every
 fitted component.
 
-*It overstates the distance travelled.* News & Events is 2/10 and the eight that
-remain are real work rather than plumbing. The remaining 17 modules are not
+*It overstates the distance travelled.* News & Events is 3/10 and the seven that
+remain are real work rather than plumbing. The remaining 16 modules are not
 evenly sized and are not evenly hard.
 
-*And it says almost nothing about the only question that matters.* Of the 81
-modules, **9 have ever consumed real market data**:
+*And it says almost nothing about the only question that matters.* Of the 80
+modules, **ten entries below have ever consumed real market data**:
 
 | | |
 |---|---|
@@ -2429,20 +2556,21 @@ modules, **9 have ever consumed real market data**:
 | M55 | volatility model - measured on ten years of real NIFTY bars and **does not beat HAR-RV** (+0.0% Parkinson, -0.1% Garman-Klass). Trial 22. |
 | M54 | quantile heads - **does not beat their own Gaussian fallback** on pinball (-2.2% at 1d, -1.3% at 5d), and both under-cover: a 90% band holds 83-85%. Trial 23. |
 | M53 | direction model - **does not beat the rules baseline**; log-loss CI [-0.0007, +0.0090] straddles zero, and its own discrimination gate refused in 4 folds of 4. Trial 24. |
+| M63 | dealer gamma positioning, on 322 real bhavcopy sessions - **not a finding**: Spearman +0.117 against the HAR residual, permutation p = 0.189 on 128 scored sessions. Days-to-expiry alone scores -0.243 on the same target, with no chain data at all. Trial 30. |
 
-That is **11%**, and the last four entries show why the count is a weak
-measure - all four are negatives. M70 found that 36.9% of the marks it was
+That is **12%**, and the last five entries show why the count is a weak
+measure - all five are negatives. M70 found that 36.9% of the marks it was
 given price a negative butterfly before any model touches them. M55 did not beat
 HAR-RV, its own residual booster declining to be kept in three of four folds.
 M54 did not beat its own Gaussian fallback on pinball.
 
-Consuming real data and being validated on it are different events. Nine
-modules have done the first; **four models have now attempted the second and all
-four lost** - M35 by 2.4% to a one-variable baseline, M55 by 0.1% to a
-three-term one, M54 by 2.2% to `sigma * z_alpha`, and M53 to a rules baseline
-that is itself indistinguishable from a coin flip.
+Consuming real data and being validated on it are different events. Ten entries
+have done the first; **five models have now attempted the second and all five
+lost** - M35 by 2.4% to a one-variable baseline, M55 by 0.1% to a three-term
+one, M54 by 2.2% to `sigma * z_alpha`, M53 to a rules baseline that is itself
+indistinguishable from a coin flip, and M63 to the calendar.
 
-*Three of the four declined themselves before any external metric was computed.*
+*Three of the five declined themselves before any external metric was computed.*
 M55's residual booster refused to be kept in three folds of four; M54's heads
 sat inside the true tails; M53's discrimination gate refused to calibrate in
 four folds of four. The guards are not decoration - they reach the same verdict

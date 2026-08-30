@@ -7,7 +7,7 @@ sdk: static
 app_file: index.html
 pinned: false
 license: mit
-short_description: Monitoring workspace for an options research system
+short_description: Options research that reports what it found, losses included
 ---
 
 # MarketSage Desk
@@ -52,6 +52,16 @@ use to decide anything.
   what it is called.
 - **PAPER indicator** — structural rather than a badge. No order in this system
   has ever reached a broker.
+
+## Two pages
+
+`index.html` is the overview: what the system is, the five models measured on
+real data, the gate ledger with G4 and G7 failing, and the machinery that makes
+a negative result trustworthy. It exists because landing directly in a dense
+instrument panel with no context tells a first-time reader nothing.
+
+`desk.html` is the workspace itself. It is deliberately dense and stays that
+way; the front page is what carries the air and the explanation.
 
 ## Running it locally
 

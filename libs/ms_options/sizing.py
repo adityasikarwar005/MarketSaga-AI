@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from libs.ms_core.config import RiskLimits
 from libs.ms_core.obs import get_logger
@@ -125,6 +125,76 @@ def kelly_fraction(inputs: KellyInput) -> float:
     b = inputs.odds
     f = (p * b - (1 - p)) / b
     return max(0.0, f)
+
+
+# --------------------------------------------------------------------------- #
+# Regime-conditional interval widening (ADR 0001)
+# --------------------------------------------------------------------------- #
+# M54's quantile heads are miscalibrated, and not by one factor. Mondrian
+# conformal fitted on real NIFTY bars returns x0.803 in the quiet tercile,
+# x1.035 in the middle and x1.188 in the busy one: the interval is too WIDE
+# when the market is calm and too NARROW when it is not. `p_lower` feeds the
+# Kelly formula and `uncertainty_modifier` shrinks with the width, so a wrong
+# width is wrong through both channels at once.
+#
+# Only the widening half is applied. The clamp is not conservatism for its own
+# sake - it closes a specific failure mode. Bucket assignment uses TRAILING
+# volatility, which is a lagging estimate: the first day of a volatility shift
+# still carries the previous regime's label. Honouring a scale below one would
+# mean narrowing the interval, and therefore sizing UP, on precisely the day
+# the regime turned and the label had not caught up yet. The correction would
+# be largest exactly where it is most wrong.
+#
+# The cost is real and is stated in the ADR: positions stay smaller than they
+# need to be on genuinely quiet days. That costs opportunity, shows up in no
+# P&L, and is the half that is safe to get wrong.
+
+WIDENING_FLOOR = 1.0
+
+
+@dataclass(frozen=True)
+class RegimeWidening:
+    """What the conformal scale did to the interval, and whether it was clamped."""
+
+    raw_scale: float
+    applied_scale: float
+
+    @property
+    def clamped(self) -> bool:
+        return self.applied_scale != self.raw_scale
+
+    @property
+    def reason(self) -> str:
+        if self.clamped:
+            return (
+                f"conformal scale x{self.raw_scale:.3f} would narrow the interval; "
+                f"clamped to x{self.applied_scale:.3f} because the regime label lags"
+            )
+        return f"interval widened x{self.applied_scale:.3f} for this regime"
+
+
+def widen_for_regime(inputs: KellyInput, scale: float) -> tuple[KellyInput, RegimeWidening]:
+    """Re-state the interval at its conformally-corrected width.
+
+    This is deliberately NOT a ``Modifier``. A modifier multiplies the finished
+    size and is forbidden from exceeding one, which is what keeps any single
+    code path from becoming a leverage knob. Widening an interval is a
+    different operation: it restates the model's own uncertainty before the
+    formula sees it, and it reaches the size through ``p_lower`` and
+    ``uncertainty_modifier`` together. Expressing it as a modifier would apply
+    it once and hide the second channel.
+
+    Returns the input unchanged when there is no interval to widen - a caller
+    with no ``p_lower`` has not claimed an uncertainty for this to correct.
+    """
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError(f"conformal scale must be finite and positive, got {scale!r}")
+    applied = max(WIDENING_FLOOR, scale)
+    if inputs.p_lower is None:
+        return inputs, RegimeWidening(raw_scale=scale, applied_scale=applied)
+    half_width = (inputs.p_win - inputs.p_lower) * applied
+    widened = replace(inputs, p_lower=max(0.0, inputs.p_win - half_width))
+    return widened, RegimeWidening(raw_scale=scale, applied_scale=applied)
 
 
 # --------------------------------------------------------------------------- #

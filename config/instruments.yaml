@@ -1,6 +1,9 @@
 # M10 - Instrument master
 #
-# WARNING: every entry below is `verified: false`.
+# WARNING: most entries below are `verified: false`.
+# NIFTY-FUT is verified (NSE/FAOP/70616, cross-checked against Angel's live
+# scrip master). BANKNIFTY-FUT's CURRENT lot is sourced but its history is
+# not, so it stays false - see its notes.
 # Lot sizes and tick sizes change by exchange circular, and using the wrong lot
 # size silently multiplies your position. Before ANY sizing decision:
 #   1. Pull the current contract specification from the exchange / your broker API
@@ -19,7 +22,12 @@ instruments:
     exchange: NSE
     segment: CASH
     tick_size: 0.05
-    expiry_weekday: 3          # TODO: verify - weekly expiry day has changed more than once
+    expiry_weekday: 1  # Tue. NSE moved index weekly/monthly expiry off Thursday; every one of
+                             # the 18 live NFO expiries in Angel's master (2026-08-30) is a
+                             # Tuesday except two, and both are the Monday before a Tuesday
+                             # holiday (2026-11-24, which config/sessions.yaml lists, and
+                             # Christmas 2029). Consumers must still apply the holiday roll:
+                             # this field is the nominal day, not the settled date.
     verified: false
     notes: "Spot index. Not directly tradable; underlying for FUT/OPT."
     lot_sizes: []              # index spot has no lot size
@@ -31,7 +39,12 @@ instruments:
     exchange: NSE
     segment: CASH
     tick_size: 0.05
-    expiry_weekday: 3          # TODO: verify
+    expiry_weekday: 1  # Tue. NSE moved index weekly/monthly expiry off Thursday; every one of
+                             # the 18 live NFO expiries in Angel's master (2026-08-30) is a
+                             # Tuesday except two, and both are the Monday before a Tuesday
+                             # holiday (2026-11-24, which config/sessions.yaml lists, and
+                             # Christmas 2029). Consumers must still apply the holiday roll:
+                             # this field is the nominal day, not the settled date.
     verified: false
     notes: "Spot index."
     lot_sizes: []
@@ -43,7 +56,12 @@ instruments:
     exchange: NSE
     segment: CASH
     tick_size: 0.05
-    expiry_weekday: 1          # TODO: verify
+    expiry_weekday: 1  # Tue. NSE moved index weekly/monthly expiry off Thursday; every one of
+                             # the 18 live NFO expiries in Angel's master (2026-08-30) is a
+                             # Tuesday except two, and both are the Monday before a Tuesday
+                             # holiday (2026-11-24, which config/sessions.yaml lists, and
+                             # Christmas 2029). Consumers must still apply the holiday roll:
+                             # this field is the nominal day, not the settled date.
     verified: false
     notes: "Spot index. Out of scope for v1 trading, in scope for data capture."
     lot_sizes: []
@@ -55,12 +73,24 @@ instruments:
     exchange: NSE
     segment: FUT
     tick_size: 0.05
-    verified: false
-    notes: "Continuous near-month series. Basis vs spot is a feature (Group B)."
+    verified: true
+    notes: "Continuous near-month series. Basis vs spot is a feature (Group B).
+      verified: true means the CURRENT contract spec is confirmed. The dated
+      history below is confirmed for NIFTY because the same circular names 75 as
+      the outgoing size."
     lot_sizes:
       - effective_from: 2020-01-01
         lot_size: 75
-        source: "TODO: verify against NSE contract specification circular"
+        source: "NSE circular NSE/FAOP/70616; corroborated by Angel One scrip master 2026-08-30 - names 75 as the size being revised, so it was in force until the change"
+      - effective_from: 2025-12-31
+        lot_size: 65
+        source: "NSE circular NSE/FAOP/70616; corroborated by Angel One scrip master 2026-08-30"
+      # The revision applies from the January 2026 series. Quarterly and
+      # half-yearly contracts were revised at end of day 2025-12-30, which is
+      # why the entry starts on the 31st; monthly contracts carried the old size
+      # until their January expiry. A single date cannot express both, and the
+      # earlier one is the safe direction: it prices a December monthly with the
+      # new lot, which understates notional rather than overstating it.
 
   - id: 12
     symbol: BANKNIFTY-FUT
@@ -70,11 +100,18 @@ instruments:
     segment: FUT
     tick_size: 0.05
     verified: false
-    notes: "Continuous near-month series."
+    notes: "Continuous near-month series. The CURRENT lot size is verified; the
+      history is not, which is why this stays false. BANKNIFTY's lot has been
+      revised several times and the 15 below is not sourced - do not price a
+      pre-2026 BANKNIFTY trade from this file until each change has its own
+      circular."
     lot_sizes:
       - effective_from: 2020-01-01
         lot_size: 15
-        source: "TODO: verify against NSE contract specification circular"
+        source: "TODO: UNVERIFIED - BANKNIFTY's lot changed more than once between 2020 and 2025 and this single entry cannot be right for all of it"
+      - effective_from: 2025-12-31
+        lot_size: 30
+        source: "NSE circular NSE/FAOP/70616; corroborated by Angel One scrip master 2026-08-30 - revised from 35 to 30"
 
   - id: 21
     symbol: INDIAVIX

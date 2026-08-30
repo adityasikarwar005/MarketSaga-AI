@@ -3,248 +3,317 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MarketSage Desk</title>
+<title>MarketSage — an options research system that reports what it found</title>
+<meta name="description" content="An event-driven options research system for Indian index derivatives. Five models have been measured on real market data and all five lost. The gate ledger is on the front page.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="site.css">
 </head>
 <body>
 
-<div class="app">
-
-  <!-- ── top bar ───────────────────────────────────────────────────── -->
-  <header class="topbar">
-    <div class="brand"><span class="glyph"></span>MarketSage&nbsp;<em>Desk</em></div>
-
-    <div class="symbol">
-      <span class="tick" id="sym">NIFTY</span>
-      <span class="exp" id="exp">24 SEP 26</span>
+<nav class="nav" id="nav">
+  <div class="shell nav-in">
+    <a class="brand" href="./"><span class="glyph"></span>MarketSage&nbsp;<em>Research</em></a>
+    <div class="nav-links">
+      <a href="#evidence">Evidence</a>
+      <a href="#gates">Gates</a>
+      <a href="#how">How it works</a>
     </div>
-
-    <div class="seg" role="group" aria-label="Forecast horizon">
-      <button data-h="15">15m</button>
-      <button data-h="30">30m</button>
-      <button data-h="60" aria-pressed="true">60m</button>
-    </div>
-
-    <div class="seg" role="group" aria-label="Chart series">
-      <button data-series="fan" aria-pressed="true">Fan</button>
-      <button data-series="implied" aria-pressed="true">Implied 1&sigma;</button>
-      <button data-series="pup" aria-pressed="false">P(up)</button>
-    </div>
-
-    <div class="grow"></div>
-
-    <div class="mode-chip">
-      <b>PAPER</b>
-      <span>no order reaches a broker</span>
-    </div>
-
-    <button class="iconbtn" id="toggle-side" title="Toggle side panel" aria-label="Toggle side panel">
-      <svg viewBox="0 0 20 20"><rect x="2.5" y="3.5" width="15" height="13"/><line x1="13" y1="3.5" x2="13" y2="16.5"/></svg>
-    </button>
-    <button class="iconbtn" id="toggle-theme" title="Toggle theme" aria-label="Toggle theme">
-      <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="4.2"/><line x1="10" y1="1.6" x2="10" y2="4"/><line x1="10" y1="16" x2="10" y2="18.4"/><line x1="1.6" y1="10" x2="4" y2="10"/><line x1="16" y1="10" x2="18.4" y2="10"/></svg>
-    </button>
-  </header>
-
-  <!-- ── body ──────────────────────────────────────────────────────── -->
-  <div class="body" id="body">
-
-    <nav class="rail" aria-label="Workspace">
-      <button aria-pressed="true" title="Forecast" aria-label="Forecast">
-        <svg viewBox="0 0 20 20"><path d="M2 14 L6 9 L10 11 L14 5 L18 7"/><path d="M2 17 L18 17"/></svg>
-      </button>
-      <button title="Surface" aria-label="Surface">
-        <svg viewBox="0 0 20 20"><path d="M2 13 C6 5, 14 5, 18 13"/><line x1="2" y1="16" x2="18" y2="16"/><line x1="10" y1="7" x2="10" y2="16"/></svg>
-      </button>
-      <button title="Book" aria-label="Book">
-        <svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12"/><line x1="3" y1="8" x2="17" y2="8"/><line x1="10" y1="8" x2="10" y2="16"/></svg>
-      </button>
-      <div class="sep"></div>
-      <button title="Events" aria-label="Events">
-        <svg viewBox="0 0 20 20"><line x1="4" y1="6" x2="16" y2="6"/><line x1="4" y1="10" x2="16" y2="10"/><line x1="4" y1="14" x2="11" y2="14"/></svg>
-      </button>
-      <button title="Risk gates" aria-label="Risk gates">
-        <svg viewBox="0 0 20 20"><path d="M10 2.5 L17 5.5 V10 C17 14, 13.5 16.5, 10 17.5 C6.5 16.5, 3 14, 3 10 V5.5 Z"/></svg>
-      </button>
-    </nav>
-
-    <!-- ── workspace ───────────────────────────────────────────────── -->
-    <main class="workspace">
-
-      <section class="chart-well">
-        <canvas id="chart"></canvas>
-
-        <div class="legend" id="legend">
-          <div class="title">Forecast distribution &middot; 60 min</div>
-        </div>
-
-        <div class="chart-note">
-          Log-return in basis points. Bands are empirical quantiles of 5&nbsp;000
-          simulated paths, calibrated onto the fitted quantile heads.
-        </div>
-      </section>
-
-      <!-- ── bottom drawer ─────────────────────────────────────────── -->
-      <section class="drawer" id="drawer">
-        <div class="tabs" role="tablist">
-          <button role="tab" aria-selected="true" data-pane="events">
-            Event stream <span class="count" id="cnt-events">7</span>
-          </button>
-          <button role="tab" aria-selected="false" data-pane="structures">
-            Structures <span class="count" id="cnt-str">1 302</span>
-          </button>
-          <button role="tab" aria-selected="false" data-pane="gates">
-            Gates <span class="count" id="cnt-gates">2 failing</span>
-          </button>
-          <button role="tab" aria-selected="false" data-pane="sources">
-            Sources <span class="count" id="cnt-src">0 / 6</span>
-          </button>
-          <div class="grow"></div>
-          <button id="toggle-drawer" title="Collapse panel" aria-label="Collapse panel"
-                  style="border-left:1px solid var(--line-soft)">&#9662;</button>
-        </div>
-
-        <div class="drawer-body">
-          <div class="pane" data-pane="events" data-active>
-            <div id="events"></div>
-            <div class="prose">
-              Four of the seven were suppressed and all four stay on the list. A stream
-              that only shows what was acted on cannot answer the question somebody
-              actually asks after a bad day, which is what the system saw and decided
-              against.
-            </div>
-          </div>
-
-          <div class="pane" data-pane="structures">
-            <table>
-              <thead><tr>
-                <th>Structure</th><th>Legs</th><th>Debit</th><th>Crossing</th><th>Max&nbsp;+</th><th>Max&nbsp;&minus;</th>
-              </tr></thead>
-              <tbody id="structures"></tbody>
-            </table>
-            <div class="prose">
-              1&nbsp;342 candidates enumerated, <b>40 dropped on crossing cost</b> — each
-              of them passing every per-leg liquidity filter. Crossing cost compounds with
-              leg count: four legs is a round trip across four spreads, and on a condor
-              whose maximum profit is the credit received that can exceed everything the
-              structure could ever make.
-            </div>
-          </div>
-
-          <div class="pane" data-pane="gates">
-            <div class="gates" id="gates"></div>
-            <div class="prose">
-              Every figure in this workspace was computed by the pipeline in this
-              repository on <b>synthetic inputs whose answers were known in advance</b>.
-              That establishes the arithmetic and says nothing about edge. Five
-              components have ever consumed real market data, and exactly one
-              <b>model</b> has been measured on it: the overnight gap forecaster, on
-              2,465 sessions of free daily bars, where it lost to a naive baseline by
-              2.4%.
-            </div>
-          </div>
-
-          <div class="pane" data-pane="sources">
-            <table>
-              <thead><tr>
-                <th>Source</th><th>Tier</th><th>Credibility</th><th>Directional</th><th>Terms</th><th>State</th>
-              </tr></thead>
-              <tbody id="sources"></tbody>
-            </table>
-            <div class="prose">
-              Every source is disabled pending its terms review, and that is the
-              configured state rather than a fault. A source below 0.50 credibility may
-              raise an alert and may <b>never</b> open a position on its own — the rule is
-              enforced in the config loader and again in the code that reads it.
-            </div>
-          </div>
-        </div>
-      </section>
-    </main>
-
-    <!-- ── side panel ──────────────────────────────────────────────── -->
-    <aside class="side">
-      <div class="tabs" role="tablist">
-        <button role="tab" aria-selected="true" data-side="reco">Recommendation</button>
-        <button role="tab" aria-selected="false" data-side="book">Book</button>
-        <button role="tab" aria-selected="false" data-side="surface">Surface</button>
-      </div>
-
-      <div class="side-body">
-        <div class="pane" data-side="reco" data-active>
-          <div class="verdict">
-            <div class="v" id="verdict">No trade</div>
-            <p id="verdict-why"></p>
-          </div>
-          <div class="block">
-            <div class="block-head"><h3>Decision</h3><span class="meta" id="reco-id"></span></div>
-            <div class="block-body"><table><tbody id="reco"></tbody></table></div>
-          </div>
-          <div class="block">
-            <div class="block-head"><h3>Distribution</h3><span class="meta">60 min</span></div>
-            <div class="block-body"><table><tbody id="dist"></tbody></table></div>
-          </div>
-        </div>
-
-        <div class="pane" data-side="book">
-          <div class="block">
-            <div class="block-head"><h3>Aggregate</h3><span class="meta" id="book-sub"></span></div>
-            <div class="block-body"><table><tbody id="greeks"></tbody></table></div>
-          </div>
-          <div class="block">
-            <div class="block-head"><h3>Legs</h3><span class="meta">smile vs Black-76</span></div>
-            <div class="block-body">
-              <table>
-                <thead><tr><th>Leg</th><th>IV</th><th>Price</th><th>&Delta;</th><th>&Delta;<sub>b76</sub></th></tr></thead>
-                <tbody id="legs"></tbody>
-              </table>
-            </div>
-          </div>
-          <div class="prose">
-            Hedging on the Black-76 delta leaves this book short by
-            <span class="mono">5.47</span> units of forward, in the same direction every
-            day. It presents as slippage.
-          </div>
-        </div>
-
-        <div class="pane" data-side="surface">
-          <div class="block">
-            <div class="block-head"><h3>Fitted slice</h3><span class="meta">T = 0.0767</span></div>
-            <div class="block-body"><table><tbody id="surface"></tbody></table></div>
-          </div>
-          <div class="block">
-            <div class="block-head"><h3>SVI parameters</h3><span class="meta">stored, not derived</span></div>
-            <div class="block-body"><table><tbody id="svi"></tbody></table></div>
-          </div>
-          <div class="prose">
-            Parameters are what gets stored; level, slope and curvature are derived from
-            them. Storing the derived features instead would make a past surface
-            impossible to re-price from, and rebuilding a past recommendation is the
-            point.
-          </div>
-        </div>
-      </div>
-    </aside>
+    <a class="btn btn-primary" href="desk.html">Open the desk</a>
   </div>
+</nav>
 
-  <!-- ── status bar ────────────────────────────────────────────────── -->
-  <footer class="status">
-    <div><span class="k">session</span> 2026-08-27</div>
-    <div><span class="k">as of</span> 11:30:00 IST</div>
-    <div><span class="k">feed</span> <span class="warn">synthetic</span></div>
-    <div><span class="k">surface age</span> 4s</div>
-    <div><span class="k">config</span> 31daaefe17de7308</div>
-    <div class="grow"></div>
-    <div id="cursor-readout"><span class="k">cursor</span> &mdash;</div>
-  </footer>
-</div>
+<header class="hero">
+  <div class="shell hero-in">
+    <span class="eyebrow"><span class="dot"></span> Paper only &middot; no order has ever reached a broker</span>
 
-<div id="tip" role="tooltip"></div>
+    <!-- No manual break: a hard <br> that reads well at one width reads badly
+         at every other, and this one produced a three-line hero with an orphan. -->
+    <h1>Most of what a research system finds is <span class="muted">nothing.</span></h1>
 
-<script src="data.js"></script>
-<script src="app.js"></script>
+    <p class="lede">
+      MarketSage is an event-driven options research system for Indian index
+      derivatives. It forecasts a distribution, prices structures against a
+      fitted volatility surface, sizes on the pessimistic end of its own
+      interval, and refuses the trade when the edge does not survive costs.
+      <strong>Five of its models have been measured on real market data. All
+      five lost.</strong> That result is on this page because a system that
+      only displays its successes cannot be used to decide anything.
+    </p>
+
+    <div class="cta">
+      <a class="btn btn-primary btn-lg" href="desk.html">Open the desk</a>
+      <a class="btn btn-ghost btn-lg" href="#evidence">See the evidence</a>
+      <span class="note">Live session snapshot &middot; no sign-in</span>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <span class="n mono">2,466</span>
+        <span class="k">Real NIFTY daily bars, Aug 2016 – Aug 2026</span>
+      </div>
+      <div class="stat">
+        <span class="n mono">323</span>
+        <span class="k">Real F&amp;O bhavcopy sessions, settlement and open interest</span>
+      </div>
+      <div class="stat">
+        <span class="n mono">30</span>
+        <span class="k">Model trials, hash-chained so none can be deleted quietly</span>
+      </div>
+      <div class="stat is-warn">
+        <span class="n mono">0</span>
+        <span class="k">Models that have beaten their baseline on real data</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="evidence">
+  <div class="shell">
+    <div class="sec-head">
+      <p class="kicker">What has actually been measured</p>
+      <h2>Every result here is a loss, and each one is recorded with its cause.</h2>
+      <p>
+        The rest of the system runs on synthetic inputs whose answers were known
+        in advance. That establishes the arithmetic and says nothing about edge.
+        These five ran on real market data.
+      </p>
+    </div>
+
+    <div class="grid grid-3">
+      <article class="card">
+        <h3>M35 &mdash; overnight gap</h3>
+        <p>
+          CRPS <span class="mono">2.4%</span> worse than a naive baseline over
+          2,465 sessions, where gate G4 needs 10% better. The regularisation
+          sweep improves to a plateau where the feature weights are essentially
+          zero &mdash; the data saying the daily cross-asset features carry
+          almost nothing.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3>M55 &mdash; volatility</h3>
+        <p>
+          <span class="mono">+0.0%</span> against HAR-RV on ten years of real
+          bars. The residual booster&rsquo;s own acceptance test declined to
+          keep it in three folds of four: the model is reporting that it has
+          nothing to add, not failing to fit.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3>M53 &mdash; direction</h3>
+        <p>
+          Log-loss delta <span class="mono">+0.004</span> with a bootstrap
+          interval straddling zero. Its own discrimination gate refused in four
+          folds of four. The rules baseline scores 0.69289 where a coin flip is
+          0.69315 &mdash; neither has anything to say.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3>M54 &mdash; quantile heads</h3>
+        <p>
+          Beaten by their own Gaussian fallback on pinball loss,
+          <span class="mono">&minus;2.2%</span> at one day. Widening them until
+          coverage reached nominal would tune the number the check exists to
+          catch, so the consequence was measured instead: position sizing was
+          running a third too large in the busy regime.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3>M63 &mdash; dealer gamma positioning</h3>
+        <p>
+          Built because every earlier model fed price history in and asked about
+          price. Open interest by strike is not in the price series. Result:
+          Spearman <span class="mono">+0.117</span> against the HAR residual,
+          permutation <span class="mono">p&nbsp;=&nbsp;0.189</span> on 128
+          sessions. Not a finding.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3>What beat it: the calendar</h3>
+        <p>
+          Days-to-expiry alone scores <span class="mono">&minus;0.243</span>
+          against the same target &mdash; stronger than the entire options-based
+          feature, with no chain data at all. Logged as a hypothesis, not a
+          finding: it was noticed while looking at something else, on a block
+          already examined.
+        </p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="gates">
+  <div class="shell">
+    <div class="sec-head">
+      <p class="kicker">Phase gate ledger</p>
+      <h2>Two gates are failing, and they are on the front page.</h2>
+      <p>
+        A gate is a threshold agreed before the measurement. Tuning until one
+        passes is the anti-pattern the whole measurement layer exists to
+        prevent, so results are recorded whether or not they pass.
+      </p>
+    </div>
+
+    <div class="ledger">
+      <div class="gate is-fail">
+        <span class="id mono">G4</span>
+        <div>
+          <div class="name">Impact library &amp; overnight gap</div>
+          <p class="why">
+            Gap CRPS 2.4% worse than naive on 2,465 sessions; the gate needs 10%
+            better. The best single-feature subset reaches +1.0%, which is a
+            ceiling rather than a step toward the bar. All 21 trials are named
+            in the ledger.
+          </p>
+        </div>
+        <span class="pill fail">Not passed</span>
+      </div>
+
+      <div class="gate is-fail">
+        <span class="id mono">G7</span>
+        <div>
+          <div class="name">Options &amp; simulator</div>
+          <p class="why">
+            Profit factor 0.04 against the 1.2 required, over 190 synthetic
+            trades. Costs of 399 against a gross of &minus;75 &mdash; the
+            strategy is paying to trade.
+          </p>
+        </div>
+        <span class="pill fail">Not passed</span>
+      </div>
+
+      <div class="gate">
+        <span class="id mono">G6</span>
+        <div>
+          <div class="name">Candle projection</div>
+          <p class="why">
+            Needs CRPS beating every baseline by 8%. An oracle handed the true
+            conditional variance beats a fitted GARCH by 0.19% on GARCH-like
+            data, so the bar is asking for structure the baseline cannot see.
+            Open question, not a failure.
+          </p>
+        </div>
+        <span class="pill open">Open</span>
+      </div>
+
+      <div class="gate">
+        <span class="id mono">G8</span>
+        <div>
+          <div class="name">Sixty sessions of live paper</div>
+          <p class="why">
+            Not started. Needs a broker adapter and the recorder pointed at a
+            real feed. Every trading day it is not running is a day of samples
+            that cannot be recovered later.
+          </p>
+        </div>
+        <span class="pill open">Open</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="shell">
+    <div class="sec-head">
+      <p class="kicker">How it is built</p>
+      <h2>The machinery that makes a negative result trustworthy.</h2>
+      <p>
+        Any system can produce a number. These are the parts that decide whether
+        the number means anything.
+      </p>
+    </div>
+
+    <div class="grid grid-2">
+      <article class="card">
+        <h3>Null tests before results</h3>
+        <p>
+          Ordinary tests ask whether a model works when there is a signal. Every
+          fitted component here also has to answer what it reports when there is
+          nothing to find. The pattern across two full audits: each defect
+          produced a working pipeline, plausible numbers, and no error.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3>Point-in-time, or it does not exist</h3>
+        <p>
+          Every record carries the time it happened, the time it was ingested
+          and the time it became available. The replay engine releases nothing
+          early, and asking the simulator for a price from before its own
+          decision raises rather than answers.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3>A hash-chained experiment log</h3>
+        <p>
+          Every model evaluation is appended to a chained file, so deleting a
+          disappointing run breaks the chain at a reportable index. A deflated
+          Sharpe computed as if there had been one attempt after there were
+          thirty is a decoration, not a correction.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3>Decisions leave a record</h3>
+        <p>
+          Changing a risk limit requires a written decision record naming what
+          it makes worse and what would show it was a mistake. A limit that can
+          be edited in a commit is one that gets edited after a losing week, by
+          the person who lost it.
+        </p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shell">
+    <div class="callout">
+      <h2>Read this before reading any number on the desk.</h2>
+      <p>
+        Every figure in the workspace came out of the real modules &mdash; the
+        surface fitter, the path sampler, the quantile heads, the Greeks engine,
+        the structure enumerator &mdash; run on <strong>synthetic inputs whose
+        answers were known in advance</strong>. The fitted parameters return to
+        six decimals and the calibrated paths land on the quantile heads to
+        five, which means the code computes what it claims to compute.
+      </p>
+      <p>
+        <strong>It does not mean the system makes money.</strong> No order has
+        ever reached a broker, and the mode indicator on the desk is structural
+        rather than a badge for exactly that reason.
+      </p>
+      <p>
+        <a class="btn btn-primary" href="desk.html">Open the desk anyway</a>
+      </p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="shell foot-in">
+    <span>MarketSage &mdash; options research for Indian index derivatives.</span>
+    <span class="grow mono">Paper only</span>
+    <a href="desk.html">Desk</a>
+  </div>
+</footer>
+
+<script>
+  /* The nav gains its rule only once the page has moved, so the hero meets the
+     top of the window without a line across it. */
+  const nav = document.getElementById("nav");
+  const onScroll = () => nav.dataset.scrolled = String(window.scrollY > 8);
+  addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+</script>
+
 </body>
 </html>

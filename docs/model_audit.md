@@ -2311,3 +2311,133 @@ seen fail is a guard nobody has measured.
 means the toolchain is now deliberately stale until somebody bumps it, and the
 bump is a three-file edit that the tests will insist on completing. That is the
 trade: silent drift replaced by explicit friction.
+
+## Real cost rates, and the two things the arithmetic settled
+
+`config/costs.yaml` shipped with placeholders and a warning that they were
+plausible magnitudes rather than statutory rates. They are now real for trades
+from 2026-08-30, derived from an Angel One brokerage-calculator breakup and
+reconciled against its own total.
+
+The trade priced: NIFTY option, buy 100 / sell 120, quantity 75. Net buy 7,500,
+net sell 9,000, total premium turnover 16,500.
+
+| line | Angel | reconstructed |
+|---|---|---|
+| Brokerage | 40.00 | 40.00 |
+| STT/CTT | 13.50 | 13.50 |
+| Transaction | 5.86 | 5.86 |
+| Stamp Duty | 0.23 | 0.23 |
+| SEBI Fees | 0.02 | 0.02 |
+| GST | 8.26 | 8.26 |
+| **TOTAL** | **67.87** | **67.86** |
+
+The one-paisa gap is stamp duty: 0.003% of 7,500 is 0.225 and the calculator
+displays 0.23.
+
+**Two things the arithmetic settled that a reading of the circulars would not
+have.**
+
+*GST is charged on brokerage, transaction charges and SEBI fees only.* 18% of
+that base is 8.26 and matches to the paisa. 18% of every charge would be 10.73.
+Including STT and stamp duty in the base would make every trade look 30% more
+expensive than it is - internally consistent, plausible, and wrong in the
+direction that makes a strategy look worse than it is.
+
+*STT is on the sell premium, not on turnover.* 13.50 against 9,000 is 0.15%
+exactly; against total turnover it would be 0.0818%, which is not a number
+anybody legislates. The clean figure is the evidence for the sell-side reading.
+
+**What the single total could not have told us.** Before the itemised breakup
+arrived, the only number available was "Other Charges 27.87" - one equation with
+five unknowns. Four plausible rate sets were tried and none reproduced it; the
+closest was 1.11 short, which would have made every cost roughly 4% light.
+Picking it would have produced a cost model that is internally consistent and
+flatters every P&L, which is the failure this project keeps recording. The
+itemised lines were worth waiting for.
+
+**The placeholder is kept, not deleted.** Costs are point-in-time and the
+backtest runs from 2016. Overwriting the historical entry with 2026 rates would
+price a 2017 trade with charges that did not exist then. The old schedule stays,
+still marked placeholder, and `audit_cost_config` now answers differently by
+date: verified for 2026-08-30, not verified for 2020-06-01. The gate report says
+which boundary that is rather than counting schedules.
+
+**Still a guess, and now visible.** `SlippageModel` is uncalibrated - half a
+point assumed, no fills behind it. Correct statutory rates do not make a fill
+price real, and G0 now lists that separately so fixing the rates cannot be
+mistaken for fixing the cost model.
+
+---
+
+## M63 positioning: two defects in what I had just written, and one wrong story
+
+The module is new, so this section is about defects caught during its own
+construction rather than found later. Both are the house failure mode: a working
+pipeline, plausible numbers, no error.
+
+### Expiry day was treated as zero time to expiry
+
+`gamma_kernel` guarded `t <= 0` by returning `0.0`. `days_to_expiry` is `0` on
+expiry day, so `t = 0/365 = 0`, so **every expiry session scored a gamma
+concentration of exactly zero** — on the one day of the cycle when gamma is at
+its maximum.
+
+Nothing failed. The output was a tidy column of numbers with a few zeros in it,
+which reads as "no open interest near spot" rather than "the function refused".
+What exposed it was a summary statistic: the correlation between concentration
+and days-to-expiry came out **+0.12**, and the mechanism says it must be
+negative. With the zeros repaired it is **−0.82**. A guard clause had flipped
+the sign of the headline relationship.
+
+**Fix.** `EXPIRY_DAY_FRACTION = 0.35` floors the year fraction, and the guard
+now *raises* on a non-positive `t` instead of returning zero. A zero is
+indistinguishable from a real reading once it has been summed; an exception is
+not.
+
+A second version of the bug survived the first test written for it. The test
+asserted `concentration > 0.0`, and substituting `1e-12` for the constant leaves
+concentration enormous and positive, so it passed. The test now pins the
+constant itself — and `year_fraction` was extracted into one function, because
+the profile property and the strike-weighting path computed it separately, which
+meant a test could pin the property while the weighting used a different number.
+
+### The docstring explained the confound with the wrong mechanism
+
+The module exists to divide out the expiry cycle, and the first draft explained
+why like this: *gamma climbs steeply as expiry approaches, so a raw
+gamma-weighted open-interest sum is mostly a restatement of how many days are
+left.*
+
+That is wrong, and it is the kind of wrong that survives review because it
+sounds like the textbook. Gamma is a density in strike. Summed over a fixed
+strike grid it is **conserved** as time to expiry falls — the peak gets taller
+and narrower and the total does not move. On a synthetic chain with uniform open
+interest the statistic is flat across the whole cycle to five decimal places,
+which is now a test.
+
+The real mechanism is an interaction. Open interest is peaked at the money, and
+the kernel *narrows onto that peak* as expiry nears: far out it averages open
+interest over a wide band, close in it sees little but the peak. Decomposed on
+64 real NIFTY sessions:
+
+| | corr with days-to-expiry |
+|---|---|
+| concentration | −0.83 |
+| total open interest (level) | −0.72 |
+| concentration ÷ total open interest (shape) | −0.82 |
+
+Both channels are real, and the shape channel is the larger one. That has a
+practical consequence: **normalising by total open interest would remove the
+smaller confound and leave the bigger one in place**, while looking like it had
+handled the problem. Anyone reading the original docstring would have reached
+for exactly that normalisation.
+
+### What this says about the module's own claims
+
+The kernel bandwidth is not fitted, and a bandwidth chosen to make a result
+appear is precisely the defect this file catalogues. Asserting "sigma is not a
+tuning knob" in a docstring is worth nothing, so
+`concentration_is_robust_to_sigma` measures it: the rank ordering of days must
+survive a change of bandwidth, and the test requires that correlation above
+0.95. If the ordering moved, the docstring would be the thing that was wrong.

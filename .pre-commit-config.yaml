@@ -61,7 +61,19 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
-        exclude: "\\.lock$|docs/pdf/"
+        # research/experiments.jsonl is excluded rather than baselined. It is a
+        # hash chain: every appended trial adds a fresh 16-character hex digest,
+        # which is a high-entropy string by construction and by design. Keeping
+        # it baselined means regenerating the baseline on every experiment - and
+        # a team in the habit of regenerating a secrets baseline to get a commit
+        # through has a secrets baseline that catches nothing.
+        #
+        # What this gives up: the file is no longer scanned, so a credential
+        # pasted into an Experiment's `notes` would not be caught here. It is
+        # written only by ExperimentLog.record from structured fields, never by
+        # hand, which is what makes that an acceptable trade rather than a
+        # quiet one.
+        exclude: '\.lock$|docs/pdf/|^research/experiments\.jsonl$'
 
   - repo: local
     hooks:

@@ -46,6 +46,7 @@ from libs.ms_core import config as cfgmod  # noqa: E402
 from libs.ms_core.obs import configure  # noqa: E402
 from libs.ms_models.cv import Experiment, ExperimentLog  # noqa: E402
 from libs.ms_news.pit_store import Partition, PitEventStore  # noqa: E402
+from libs.ms_options.costs import SlippageModel  # noqa: E402
 
 
 class GateState(StrEnum):
@@ -98,15 +99,38 @@ def check_g0(cfg, sessions: int) -> GateStatus:
             f"{len(unverified)} instruments unverified ({', '.join(unverified[:3])}...) "
             "- lot and tick sizes drive every sizing decision"
         )
+    # Costs are point-in-time, so "are the rates real" has a date attached. The
+    # boundary is what a reader needs: a backtest that ends before it is priced
+    # entirely on placeholders whatever the newest schedule says.
+    real = sorted(
+        sch.effective_from
+        for sch in cfg.costs.schedules
+        if "TODO" not in sch.source and "PLACEHOLDER" not in sch.source.upper()
+    )
     placeholder = [
         sch.effective_from
         for sch in cfg.costs.schedules
         if "TODO" in sch.source or "PLACEHOLDER" in sch.source.upper()
     ]
-    if placeholder:
+    if placeholder and real:
         blockers.append(
-            f"{len(placeholder)} of {len(cfg.costs.schedules)} cost schedules are "
-            "placeholders - any P&L computed from them is a rehearsal"
+            f"cost rates are real only from {real[0]}; {len(placeholder)} earlier "
+            f"schedule(s) are placeholders, so any backtest before that date is "
+            "priced on invented charges"
+        )
+    elif placeholder:
+        blockers.append(
+            f"all {len(placeholder)} cost schedules are placeholders - any P&L "
+            "computed from them is a rehearsal"
+        )
+
+    # Separate from the rates, and it survives them being correct: an
+    # uncalibrated slippage model is a guess sitting inside every fill.
+    slippage = SlippageModel()
+    if not slippage.calibrated:
+        blockers.append(
+            f"slippage is uncalibrated ({slippage.half_spread_points} points assumed) "
+            "- correct statutory rates do not make a fill price real"
         )
     enabled = [s for s in cfg.sources.sources if s.enabled]
     if not enabled:
