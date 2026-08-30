@@ -10,7 +10,9 @@ Everything below is a thing a browser can be wrong about in a way no unit test
 sees: a colour that only resolves in one theme, a canvas that draws at the
 wrong scale on a retina display, a panel that stops scrolling when it collapses.
 
-Run it against both themes and at two window widths.
+Run it against both themes and at **four** widths: a full desktop, 1100px,
+860px and 700px. The layout re-flows at 1120 and again at 760, and every fault
+section 8 lists was invisible at desktop width.
 
 ---
 
@@ -95,6 +97,55 @@ Run it against both themes and at two window widths.
 
 ---
 
+## 8 · Layout, at every width
+
+Each of these was a real fault found on 2026-08-30, and each is invisible at a
+wide window - which is why the checklist now names the widths.
+
+- [ ] The chart's explanatory note sits in the panel header, **not** over the
+      plot. It shared the right-hand gutter with the price scale and the two
+      printed on top of each other.
+- [ ] No two numbers overlap in the right-hand price scale. A gridline label
+      that would land under a terminal value tag is dropped; the tag wins.
+- [ ] The **entry** label at the left of the time axis is complete, not clipped.
+- [ ] The last row of the event stream is not sliced by the status bar. The
+      drawer fades at its bottom edge to show there is more.
+- [ ] At **1100px and 860px** the side panel moves *below* the chart and keeps
+      its three tabs. It must not vanish - it holds the verdict, and an earlier
+      rule simply `display: none`d it.
+- [ ] At those widths nothing overlaps: check the drawer against the chart, and
+      the drawer against the side panel. Both overlapped at different points.
+- [ ] At **700px** the tool rail is a horizontal strip **under the toolbar**,
+      not at the foot of a scrolling page.
+- [ ] The toolbar and status bar stay one line at every width and scroll
+      sideways if they must. The status bar wrapping to two lines pushed it up
+      into the panel above.
+- [ ] Collapse the side panel and the drawer, at each width: the chart redraws
+      to fill the space and never paints outside its own box.
+
+## 9 · The overview page
+
+`index.html` is the front page; the workspace moved to `desk.html`.
+
+- [ ] The hero headline sets on **two lines at desktop width**, with no orphan
+      word and no hard `<br>` doing the work.
+- [ ] The four stat tiles read: 2,466 bars &middot; 323 chain sessions &middot;
+      30 trials &middot; **0 models that have beaten their baseline**. The last
+      one is the point of the page and must not be softened.
+- [ ] The gate ledger shows **G4 and G7 as Not passed**, above the fold of that
+      section. A front page that lists only open items would be a different
+      claim from the one this project makes.
+- [ ] Every figure on the page matches `docs/gates.md`. Nothing here is
+      illustrative and nothing is rounded in the flattering direction.
+- [ ] **Open the desk** in the nav, in the hero, and in the closing callout all
+      reach `desk.html`.
+- [ ] On the desk, the brand at top left links back to the overview.
+- [ ] The sticky nav gains its bottom rule only once the page has scrolled.
+- [ ] At 820px the nav links collapse and the gate rows re-flow with the status
+      pill under the text, not clipped beside it.
+- [ ] At 520px the call-to-action buttons go full width and nothing overflows
+      horizontally &mdash; check by scrolling the page sideways; it must not.
+
 ## Known gaps
 
 These are open, not overlooked:
@@ -112,6 +163,10 @@ These are open, not overlooked:
 Every figure came out of the modules in this repository — `fit_surface`,
 `simulate`, `calibrate`, `build_fan`, `greeks_from_surface`,
 `enumerate_structures` — run on **synthetic inputs whose answers were known in
-advance**. That establishes the arithmetic and says nothing about edge. Exactly
-one component has ever run on real market data, and it lost to a naive
-baseline by 13.7%.
+advance**. That establishes the arithmetic and says nothing about edge.
+
+Exactly one *model* has been measured on real market data: the overnight gap
+forecaster, on 2,465 sessions of free daily bars, where it came out **2.4%
+worse** than a naive baseline. This file previously said 13.7%, which was the
+figure from an earlier run on 496 sessions; four fifths of that deficit turned
+out to be sample size. `docs/gates.md` is authoritative.

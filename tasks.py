@@ -16,7 +16,7 @@ Cross-platform, no `make` required.
     python tasks.py verify    the full gate check: lint + typecheck + test
     python tasks.py ci        the six CI stages, each reporting separately
     python tasks.py restore-drill   the monthly restore drill's self-test
-    python tasks.py dashboard  serve the workspace at http://127.0.0.1:8787
+    python tasks.py dashboard  serve the site at http://127.0.0.1:8787 (desk at /desk.html)
     python tasks.py holidays  discover the exchange calendar (and why)
     python tasks.py qc        data quality gates for every recorded day
     python tasks.py research  end-to-end research smoke test on a recorded day
@@ -232,10 +232,11 @@ def angel_check() -> None:
 def dashboard() -> None:
     """M91 - serve the dashboard.
 
-    A plain static server. The workspace reads its session from `data.js`
-    rather than fetching JSON, so it also opens straight from the filesystem -
-    but served is how it will actually run, and a thing only ever opened one
-    way acquires assumptions about that way.
+    A plain static server. Two pages: `index.html` is the overview and
+    `desk.html` is the workspace. The workspace reads its session from
+    `data.js` rather than fetching JSON, so it also opens straight from the
+    filesystem - but served is how it will actually run, and a thing only ever
+    opened one way acquires assumptions about that way.
     """
     import http.server
 

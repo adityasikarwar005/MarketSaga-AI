@@ -121,11 +121,22 @@ body {
   align-items: stretch;
   background: var(--panel-2);
   border-bottom: 1px solid var(--line);
+  /* At 860px the instrument date wrapped onto a second line and pushed the
+     bar taller than --topbar-h, which the app grid does not allow for. It
+     scrolls sideways instead; the PAPER chip is pinned so the one element the
+     spec calls unmissable cannot be the thing that scrolls out of sight. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
+.topbar::-webkit-scrollbar { height: 0; }
+.topbar > * { flex: none; }
 
 .brand {
   display: flex;
   align-items: center;
+  text-decoration: none;
+  color: inherit;
   gap: var(--s2);
   padding: 0 var(--s4);
   border-right: 1px solid var(--line);
@@ -228,11 +239,49 @@ body {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
+  /* `min-height: 0` has to be on every step of the chain, not only the leaf.
+     A grid item defaults to `min-height: auto` and refuses to shrink below its
+     content. The drawer is a fixed body plus a tab strip, so on a short window
+     this column ran past its 1fr track and the last event row ended up
+     underneath the status bar. `.body` already had this; `.workspace` did not,
+     and the symptom shows up at the bottom of the deepest child. */
+  min-height: 0;
   background: var(--panel);
 }
 
-/* chart well */
-.chart-well { position: relative; min-height: 0; background: var(--sunk); }
+/* chart panel: a header row, then the plot.
+   The note used to be absolutely positioned over the canvas at top right,
+   which is the same gutter the price scale draws its labels into. Giving it a
+   row of its own is the fix - no z-order or padding trick keeps two things
+   out of each other's way as reliably as not putting them in the same box. */
+.chart-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  background: var(--sunk);
+}
+
+.chart-head {
+  display: flex; align-items: baseline; gap: var(--s4);
+  padding: var(--s3) var(--s4) var(--s2);
+  border-bottom: 1px solid var(--line-soft);
+}
+.chart-title {
+  margin: 0; flex: none;
+  font-family: var(--sans); font-size: 12.5px; font-weight: 600;
+  color: var(--fg); letter-spacing: .01em;
+}
+.chart-note {
+  margin: 0 0 0 auto; max-width: 46ch; text-align: right;
+  font-size: 10.5px; line-height: 1.45; color: var(--fg-faint);
+}
+
+/* `overflow: hidden` is not cosmetic here. resize() floors the canvas at 220px
+   tall, so whenever this box is shorter than that the canvas is larger than
+   its container - and with no clip it painted straight over the drawer, which
+   is what the reflowed layout was doing at 1100px. Clip it, and separately
+   stop the box getting that short (see the narrow section). */
+.chart-well { position: relative; min-height: 0; overflow: hidden; background: var(--sunk); }
 #chart { display: block; width: 100%; height: 100%; cursor: crosshair; }
 
 .legend {
@@ -240,22 +289,24 @@ body {
   display: flex; flex-direction: column; gap: 3px;
   pointer-events: none;
   font-family: var(--mono); font-size: 11.5px;
+  background: color-mix(in srgb, var(--sunk) 86%, transparent);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
 }
-.legend .title {
-  font-family: var(--sans); font-size: 12px; font-weight: 600;
-  color: var(--fg); letter-spacing: .01em; margin-bottom: 2px;
+.legend-at {
+  display: flex; align-items: baseline; gap: var(--s2);
+  font-family: var(--sans); font-size: 11px; font-weight: 600;
+  color: var(--fg-dim); letter-spacing: .02em; margin-bottom: 3px;
+}
+.legend-hint {
+  font-size: 9px; font-weight: 500; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--fg-faint);
 }
 .legend .row { display: flex; align-items: center; gap: var(--s2); color: var(--fg-dim); }
 .legend .swatch { width: 9px; height: 9px; flex: none; }
 .legend .v { color: var(--fg); min-width: 62px; text-align: right; }
 .legend .k { min-width: 88px; }
-
-.chart-note {
-  position: absolute; right: var(--s4); top: var(--s3);
-  max-width: 290px; text-align: right;
-  font-size: 10.5px; color: var(--fg-faint); line-height: 1.5;
-  pointer-events: none;
-}
 
 /* ── bottom drawer ──────────────────────────────────────────────────── */
 .drawer { border-top: 1px solid var(--line); background: var(--panel); }
@@ -283,7 +334,25 @@ body {
 }
 .tabs .grow { flex: 1; border-right: 0; }
 
-.drawer-body { height: var(--drawer-h); overflow-y: auto; }
+/* A ceiling as well as a height: it still asks for --drawer-h, but on a short
+   window it yields to the chart instead of pushing itself off the bottom. */
+.drawer-body {
+  height: var(--drawer-h); max-height: 38vh; overflow-y: auto;
+  /* Without this the last row is sliced mid-glyph flush against the status
+     bar, which reads as a rendering fault rather than as "scroll for more". */
+  padding-bottom: var(--s2);
+  scrollbar-gutter: stable;
+}
+/* A scroll container with a hard edge gives no sign that it has more in it.
+   The fade is the cue, and it is drawn on the container rather than added as
+   an element so it cannot end up in the tab order or under the pointer. */
+.drawer-body,
+.side-body {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+          mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+.drawer-body:not(:hover),
+.side-body:not(:hover) { scrollbar-color: var(--line) transparent; }
 .pane { display: none; }
 .pane[data-active] { display: block; }
 
@@ -297,7 +366,12 @@ body {
 .body.side-collapsed .side { display: none; }
 
 .side .tabs button { flex: 1; justify-content: center; border-right: 1px solid var(--line-soft); }
-.side-body { flex: 1; overflow-y: auto; }
+/* Three equal tabs stop fitting once the panel is full width but the window is
+   narrow; "Surface" was being clipped rather than wrapped. */
+.side .tabs { overflow-x: auto; scrollbar-width: none; }
+.side .tabs::-webkit-scrollbar { height: 0; }
+.side .tabs button { min-width: max-content; padding-inline: var(--s3); }
+.side-body { flex: 1; overflow-y: auto; padding-bottom: var(--s3); scrollbar-gutter: stable; }
 
 .block { border-bottom: 1px solid var(--line); }
 .block-head {
@@ -404,10 +478,106 @@ tbody tr:hover td { background: var(--panel-2); }
 #tip .lbl { display: block; margin-bottom: var(--s1); }
 @media (prefers-reduced-motion: reduce) { #tip { transition: none; } }
 
-/* ── narrow ─────────────────────────────────────────────────────────── */
-@media (max-width: 1080px) {
-  .body, .body.side-collapsed { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
-  .side { display: none; }
+/* ── narrow ─────────────────────────────────────────────────────────────
+   The previous rule had one breakpoint and it `display: none`d the side
+   panel. That panel holds the recommendation - the verdict, what blocked it,
+   and the Kelly fraction - which is the single thing somebody opens this
+   screen to read. Deleting it below 1080px meant every laptop in a portrait
+   split, and every tablet, got a chart and no answer.
+
+   It moves rather than disappears. Nothing here removes information; it only
+   re-flows and, at the smallest sizes, drops decoration. */
+
+@media (max-width: 1400px) {
+  :root { --side-w: 288px; }
+  .chart-note { max-width: 38ch; }
+}
+
+/* Below this the three columns stop fitting side by side, so the side panel
+   becomes a row beneath the chart and keeps its tabs. */
+@media (max-width: 1120px) {
+  .body,
+  .body.side-collapsed { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
+  /* Stacked, this stops being a "fill the viewport" layout and becomes a
+     document. Sizing it with 1fr tracks was the mistake: a chart panel with a
+     minimum taller than its own track simply overflows and paints across
+     whatever is beneath it, which is how it came to cover the drawer's tab
+     strip. Everything here is `auto` with explicit heights, and the column
+     scrolls when the total will not fit. A readable chart below the fold beats
+     an unreadable one above it. */
+  .body {
+    grid-template-areas: "rail work" "rail side";
+    /* `max-content`, not `auto`. Measured in the browser rather than reasoned
+       about: with `auto auto` in a container of definite height the two rows
+       came back 322.556px and 323.444px - an even split of the 646px available,
+       not their content heights - and `align-content: start` did not change it.
+       The workspace then held 543px of content in a 323px track and painted the
+       difference straight across the panel below. `max-content` sizes each row
+       to what is in it, the column overflows honestly, and `overflow-y` turns
+       that into a scroll. */
+    grid-template-rows: max-content max-content;
+    align-content: start;
+    overflow-y: auto;
+  }
+  .rail { grid-area: rail; }
+  /* `.workspace` needs converting too, not just `.body`. A `minmax(0, 1fr)`
+     track inside an auto-height parent resolves to zero, so the fixed-height
+     chart panel overflowed it and painted over the drawer - the same fault as
+     the row above, one level down. Every ancestor in a stacked layout has to
+     stop using fill semantics, or the innermost one silently keeps them. */
+  .workspace { grid-area: work; grid-template-rows: max-content max-content; align-content: start; }
+  .chart-panel { height: 340px; overflow: hidden; }
+  .side {
+    grid-area: side; display: flex;
+    border-left: 0; border-top: 1px solid var(--line);
+  }
+  .side-body { max-height: 320px; }
+  .body.side-collapsed .side { display: none; }
+  :root { --drawer-h: 168px; }
+  .drawer-body { max-height: none; }
+}
+
+/* Phone and small tablet: the icon rail turns into a strip along the bottom,
+   the chart note folds under the title, and the drawer gets a floor so it
+   cannot be squeezed to a single row. */
+@media (max-width: 760px) {
+  .app { grid-template-rows: var(--topbar-h) minmax(0, 1fr) auto; }
+  .body,
+  .body.side-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+    /* The rail is navigation. Putting it last meant scrolling past the whole
+       page to reach it, so it sits directly under the toolbar instead. */
+    grid-template-areas: "rail" "work" "side";
+    grid-template-rows: max-content max-content max-content;
+    align-content: start;
+  }
+  .workspace { grid-template-rows: max-content max-content; align-content: start; }
+  .chart-panel { height: 300px; }
+  .side-body { max-height: 280px; }
+  .rail {
+    flex-direction: row; justify-content: flex-start;
+    border-right: 0; border-top: 1px solid var(--line);
+    overflow-x: auto;
+  }
+  .rail .sep { width: 1px; height: 22px; margin: 0 var(--s2); }
+  .chart-head { flex-direction: column; align-items: flex-start; gap: var(--s1); }
+  .chart-note { margin-left: 0; text-align: left; max-width: none; }
+  .legend { font-size: 10.5px; }
+  .side { max-height: 52vh; }
+  /* Wrapping this to two lines made it grow into the panel above it. It
+     scrolls sideways instead, so its height stays exactly --status-h and the
+     app grid keeps working. The session and mode fields are first, which are
+     the ones that must be readable without scrolling. */
+  .status { overflow-x: auto; scrollbar-width: none; }
+  .status::-webkit-scrollbar { height: 0; }
+  .status > * { flex: none; }
+  .status .grow { flex: 1 0 auto; }
+  :root { --drawer-h: 200px; }
+}
+
+/* The event row drops its source column before it drops the reason a row was
+   suppressed. The reason is the part that cannot be reconstructed later. */
+@media (max-width: 900px) {
   .ev { grid-template-columns: 52px 34px 1fr; }
   .ev .src { display: none; }
 }

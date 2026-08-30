@@ -199,6 +199,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M60** | Path sampler | L6 | P6 | M55, M54 | ✅ | ☑ |
 | **M61** | Fan-chart producer | L6 | P6 | M60 | ✅ | ☑ |
 | **M62** | Projection scorer (pinball/CRPS/PIT) | L6 | P6 | M61 | ✅ | ☑ |
+| **M63** | Dealer gamma positioning (OI by strike, cycle-adjusted) | L6 | P6 | M14 | ✅ | ☑ |
 | **M70** | IV surface fitter | L7 | P7 | M14 | ✅ | ☑ |
 | **M71** | Greeks engine | L7 | P7 | M70 | ✅ | ☑ |
 | **M72** | Structure enumerator & liquidity filter | L7 | P7 | M71 | ✅ | ☑ |
@@ -1676,6 +1677,50 @@ python jobs/eval_projection.py --walk-forward --report
 
 ### L7 · DECISION
 
+#### M63 · Dealer gamma positioning ✅ — **measured and lost**
+**Owns:** where open interest sits relative to spot, with the expiry cycle divided out.
+
+**Why it was built.** Four models had been measured on real data and all four
+lost, and they shared a shape: each fed price history into a model and asked a
+question about price. Open interest by strike is not in the price series. It is
+direction-free, which matters because direction is what four models had failed
+to predict.
+
+**Built** `libs/ms_models/positioning.py`, `tests/ml/test_positioning_nulls.py`
+(25 tests), `jobs/eval_positioning.py`. No dealer sign is applied — the
+published GEX literature multiplies open interest by an assumed dealer position,
+that assumption is unobservable, and it does all the work.
+
+**Verify**
+```bash
+python -m pytest tests/ml/test_positioning_nulls.py -q
+python jobs/eval_positioning.py --symbol NIFTY      # reports, does not assert
+```
+
+**Result: not a finding.** Spearman against the HAR residual **+0.117**,
+permutation p **0.189**, on 128 scored test sessions out of 322 real NIFTY
+sessions. Recorded as trial 30 and in `docs/gates.md`.
+
+**What beat it: the calendar.** Days-to-expiry alone scores **−0.243** against
+the same target — stronger than the whole options-based feature, with no chain
+data at all. And the cycle adjustment leaks: the adjusted score still carries
+−0.163 of days-to-expiry, so part of the +0.117 is that same calendar arriving
+by a longer route.
+
+**Traps this module documents.** Both were live in its first draft.
+`gamma_kernel` returned 0.0 on expiry day, because days-to-expiry is 0 there and
+the guard treated that as invalid — zeroing the statistic on the one day gamma
+is largest, and flipping the headline correlation from −0.82 to +0.12 with no
+error raised. And the docstring explained the confound with the wrong mechanism:
+gamma is a density in strike and its sum over a fixed grid is *conserved* into
+expiry, so "gamma rises so the sum rises" is false. The real driver is that open
+interest is peaked at the money and the kernel narrows onto that peak — which
+matters, because the fix the wrong story suggests (divide by total open
+interest) removes the smaller confound and leaves the larger one. Full write-up
+in `docs/model_audit.md`.
+
+---
+
 #### M70 · IV surface fitter ✅
 **Tasks**
 - [x] IV from **mid** prices only (never LTP); Black-76 on futures with the right forward
@@ -2026,6 +2071,35 @@ the AP-hack case: loud, high-severity, low-credibility, shown and not acted on.
 
 Every derived number carries a tooltip saying **how it is computed**, not what
 it is called.
+
+**Layout, fixed 2026-08-30.** The workspace was visibly broken and had been
+since it was written; none of it was caught because everything above was
+checked at one window width. The chart's explanatory note was absolutely
+positioned into the same right-hand gutter the price scale draws its labels
+into, so the two printed over each other. Gridline labels collided with the
+terminal value tags. The `entry` label was clipped off the left edge. The last
+event row was sliced by the status bar.
+
+The structural cause of the worst of it was `min-height` and track sizing.
+`.workspace` was missing `min-height: 0`, so the drawer pushed past its track
+and under the status bar. In the re-flowed layouts a `minmax(0, 1fr)` track
+inside an auto-height parent resolves to zero, so a fixed-height chart panel
+overflowed and painted across the drawer - and then, one level up, `auto`
+tracks in a definite-height container came back as an even split rather than at
+their content heights, which put 543px of workspace into a 323px row. That last
+one was found by reading the computed track sizes out of the browser rather
+than by reasoning about the cascade, and the fix is `max-content`, not `auto`.
+
+The single breakpoint at 1080px `display: none`d the side panel - the panel
+holding the verdict, what blocked it, and the Kelly fraction. It now re-flows
+beneath the chart and keeps its tabs. Nothing in the responsive ladder removes
+information; below 900px the event row drops its source column and keeps the
+suppression reason, because the reason is the part that cannot be
+reconstructed afterwards.
+
+`tests/manual/dashboard_checklist.md` gained a section 8 naming each fault and
+the four widths to check, since every one of them was invisible at desktop
+width.
 
 **Still open, and marked partial for it:**
 - The **Playwright smoke test is not written**. Until it is, nothing here is

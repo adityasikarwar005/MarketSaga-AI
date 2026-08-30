@@ -94,7 +94,20 @@
     ctx.font = '11px "IBM Plex Mono", monospace';
     ctx.textBaseline = "middle";
 
-    /* grid + price scale */
+    /* grid + price scale
+       The terminal value tags below occupy the same right-hand gutter as these
+       labels. Two numbers a few basis points apart therefore printed on top of
+       each other - -88 over -86 at the default window. Reserve the tag rows
+       and drop any gridline label that would land in one: the tag carries the
+       more useful number of the two. */
+    const taken = series.fan
+      ? [F.q95[LAST], F.q05[LAST], F.q50[LAST]].map(v => s.y(v))
+      : [];
+    /* The tag is drawn as a 16px-tall filled box, so half of it is 8px, and
+       the gridline label has about 5px of its own half-height. 11px left
+       +120 printed and then painted over by the +129 tag. */
+    const clashes = y => taken.some(t => Math.abs(t - y) < 14);
+
     const step = niceStep(s.hi - s.lo);
     ctx.strokeStyle = C.grid;
     ctx.lineWidth = 1;
@@ -103,16 +116,19 @@
     for (let v = Math.ceil(s.lo / step) * step; v <= s.hi; v += step) {
       const y = Math.round(s.y(v)) + 0.5;
       ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(box.w - PAD.r, y); ctx.stroke();
-      ctx.fillText(fmt(v, 0), box.w - PAD.r + 9, y);
+      if (!clashes(y)) ctx.fillText(fmt(v, 0), box.w - PAD.r + 9, y);
     }
-    ctx.textAlign = "center";
     for (let m = 0; m <= LAST; m += 10) {
       const x = Math.round(s.x(m)) + 0.5;
       ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, PAD.t + s.ih); ctx.stroke();
+      /* The first and last ticks sit on the plot edges, so a centred label
+         hangs off the canvas and is clipped. Anchor those two inwards. */
+      ctx.textAlign = m === 0 ? "left" : m === LAST ? "right" : "center";
       ctx.fillText(m ? "+" + m + "m" : "entry", x, box.h - PAD.b / 2);
     }
+    ctx.textAlign = "center";
     ctx.textAlign = "left";
-    ctx.fillText("bp", box.w - PAD.r + 9, PAD.t - 8);
+    ctx.fillText("bp", box.w - PAD.r + 9, PAD.t - 9);
 
     /* implied cone, under the fan so the forecast reads against it */
     if (series.implied) {
@@ -198,7 +214,10 @@
     const at = cursor === null ? LAST : cursor;
     const swatch = c => `<span class="swatch" style="background:${c}"></span>`;
     $("#legend").innerHTML =
-      `<div class="title">Forecast distribution &middot; ${at ? at + " min" : "entry"}</div>` +
+      /* The panel heading is static markup now. What belongs here is the
+         thing that changes: where along the horizon these figures are read. */
+      `<div class="legend-at">${at ? "at +" + at + " min" : "at entry"}` +
+      `${cursor === null ? '<span class="legend-hint">terminal</span>' : ""}</div>` +
       [
         ["95th", F.q95[at], "var(--band-outer)"],
         ["75th", F.q75[at], "var(--band-inner)"],
@@ -409,6 +428,13 @@
   $("#cnt-src").textContent = S.sources.filter(s => s.enabled).length + " / " + S.sources.length;
 
   window.addEventListener("resize", resize);
+  /* The window is not the only thing that changes this canvas's box. Collapsing
+     a panel, and every breakpoint that re-flows the side panel from a column
+     into a row, resize the well while the window stays exactly as it was.
+     Watching the element covers all of them. */
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => resize()).observe(canvas.parentElement);
+  }
   resize();
   legend();
 })();
