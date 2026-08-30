@@ -1760,3 +1760,149 @@ recorded here rather than done in passing.
 Local ruff was upgraded to 0.16.5 to match, and the failure now reproduces in
 the working copy before it can reach a runner. That fixes today, not the
 mechanism.
+
+## M55 on real bars: HAR-RV is not beaten, and the model says so itself
+
+`python jobs/eval_volatility.py` is the first time the volatility model has seen
+a real price series. Ten years of NIFTY daily bars, 2016-08-29 to 2026-08-28,
+walk-forward over four folds, HAR-RV as the baseline.
+
+| estimator | HAR QLIKE | model QLIKE | improvement | booster kept |
+|---|---|---|---|---|
+| Parkinson | 0.41591 | 0.41591 | **+0.0%** | 0 of 4 folds |
+| Garman-Klass | 0.36085 | 0.36106 | **-0.1%** | 1 of 4 folds |
+
+At horizon 5, with the rows thinned to remove overlapping outcome windows, both
+estimators give +0.0% and the booster is kept in 0 of 4 folds. Logged as trial
+22.
+
+**The interesting column is the last one.** `VolatilityModel` fits a residual
+booster on top of HAR and keeps it only when it improves QLIKE on a held-out
+split. On real data it mostly declines to keep it at all - the model's own
+acceptance test is what produced the +0.0%, not a tie. That is the guard
+behaving exactly as designed, and it is worth more than the headline number: an
+earlier version of this project would have shipped a residual booster that
+"improved" things because nothing was checking.
+
+**HAR-RV being hard to beat is not a surprise, and that is the point.** Three
+terms - yesterday, last week, last month - out-of-sample, on daily data. The
+literature has said for twenty years that this is a strong baseline. What was
+unknown was whether *this* implementation cleared it, and now that is measured
+rather than assumed.
+
+**What it does not say.** It does not say the module is wrong; every arithmetic
+property it claims is still pinned by its tests. It says the residual booster
+adds nothing on daily NIFTY bars, which is a statement about the data available
+to it. The features it has are three lags of realised variance. The model was
+designed to accept extra features per row (`HARRow.extra`), and none were
+supplied here - so the honest reading is that HAR's own three terms exhaust what
+daily OHLC carries about tomorrow's variance, and improving on that needs
+information this series does not contain.
+
+**The realised variance is itself an estimate.** Daily bars give one high, one
+low, one open, one close, so Parkinson and Garman-Klass infer variance from a
+range rather than summing intraday squared returns. They disagree by design
+about jumps. Both were run because agreement between them is weak evidence and
+disagreement would have been a finding; they agreed.
+
+## M54 on real bars: both models under-cover, which matters more than which won
+
+`python jobs/eval_quantiles.py` is the first time the quantile heads have seen a
+real return series. Ten years of NIFTY daily bars, walk-forward over four folds,
+baseline the module's own documented fallback - Gaussian quantiles whose sigma is
+the trailing realised volatility scaled to the horizon. Trial 23.
+
+| horizon | Gaussian pinball | heads pinball | improvement | Gaussian cov90 | heads cov90 |
+|---|---|---|---|---|---|
+| 1d | 0.002372 | 0.002424 | **-2.2%** | 82.7% | **85.4%** |
+| 5d | 0.005540 | 0.005611 | **-1.3%** | 80.2% | **83.4%** |
+
+Every head fitted; the fallback was used zero times.
+
+**The headline is a loss, and the sub-plot is not.** The heads lose on pinball
+at both horizons and are closer to nominal coverage at both. They are wider and
+more honest; the Gaussian is sharper and more confident than the data supports.
+Pinball is the metric this module is judged on, so it does not pass - but
+reporting that as "worse" would hide the only thing the extra machinery
+demonstrably bought, so the job now says both.
+
+**The number that matters more than either model.** A 90% band that holds the
+outcome 83.4% of the time is not a 90% band. Both models under-cover, at both
+horizons, by 5-10 points:
+
+    nominal 90%   ->   heads 85.4% / 83.4%,   Gaussian 82.7% / 80.2%
+
+Real index returns have fatter tails than either representation carries. The
+Gaussian cannot fix this in principle - it is symmetric and thin-tailed by
+construction. The heads under-cover for a different reason: pinball-optimal
+quantiles fitted on a sample with few tail events place the 5% and 95% heads
+inside where the true tails are, and the walk-forward folds contain roughly two
+years of test data each.
+
+The consequence is downstream and specific. **M75 sizes against these
+intervals.** A band 6 points too narrow makes every position slightly too large,
+and the error is not uniform: it concentrates on the days the tail arrives,
+which are the days a sizing mistake is expensive. That is a finding about the
+whole projection layer rather than about M54, and it is the reason this
+evaluation was worth running even though the model lost.
+
+**What was not done.** The obvious response - widen the outer heads until
+coverage hits 90% - was not taken. That would be tuning a number until it passes
+the check that exists to catch it, which is the anti-pattern the entire
+measurement layer is here to prevent. If the heads should be recalibrated, it
+needs to be a design decision with its own justification, made against a
+held-out period that this evaluation has not already consumed.
+
+## What the under-coverage costs: M75 sizes 1.1x to 11x too large
+
+The M54 evaluation above is a statement about a model. `jobs/sizing_sensitivity.py`
+asks the question that makes it matter, because M75 sizes against exactly those
+intervals.
+
+**The error has two channels and they compound.** `KellyInput.p_lower` exists so
+the formula runs on the pessimistic end of the model's interval rather than its
+point estimate - a narrow interval makes that substitution give back less than
+it was meant to. `uncertainty_modifier` reads the interval half-width and shrinks
+the position as it widens - an understated width reads as a confident model and
+the multiplier stays near 1.0. One makes the bet look better; the other makes it
+look surer. Both push the same way.
+
+**How much narrow.** Bisecting on a scale factor applied about the median, on
+1,944 out-of-sample rows:
+
+    heads     coverage 85.4%  ->  band must widen x1.18 to reach 90%
+    Gaussian  coverage 82.7%  ->  band must widen x1.22
+
+**What that does to size**, running Kelly x uncertainty at x1.18:
+
+| bet | half-width | as sized | honest | too large by |
+|---|---|---|---|---|
+| even money, modest edge | 0.03 | 0.0347 | 0.0246 | 1.41x |
+| even money, strong edge | 0.03 | 0.1560 | 0.1426 | 1.09x |
+| even money, strong edge | 0.06 | 0.0880 | 0.0675 | 1.30x |
+| even money, strong edge | 0.10 | 0.0222 | 0.0020 | **11.38x** |
+| 2:1 payoff, modest edge | 0.03 | 0.0737 | 0.0648 | 1.14x |
+| 2:1 payoff, modest edge | 0.06 | 0.0293 | 0.0163 | 1.79x |
+| 1:2 payoff, high hit rate | 0.03 | 0.0607 | 0.0454 | 1.34x |
+
+The 11x is not an outlier to be explained away, and it is not typical either. It
+is what happens near the edge boundary: an 18% wider interval moves `p_used`
+just far enough that Kelly nearly vanishes, so the ratio between a small number
+and a much smaller one is large. The honest summary is the one the job prints -
+**1.09x to 11.38x, worst where the interval is widest**, which is to say worst
+exactly when the model is least sure.
+
+**A correction I had to make to my own output.** The first version of this job
+reported "in 5 of 12 cases the honest interval removes the edge entirely -
+those are bets the system currently takes." That was wrong. In all five, the
+narrow interval also sizes to zero: the system does not take them, and they are
+not evidence of anything. Counting a case where both sides agree on no position
+as a failure of one side inflates the finding, which is the exact move this
+document exists to catch. The job now separates "flat either way" from "should
+be flat" and reports zero of the latter.
+
+**Nothing was changed.** Widening the heads until coverage reaches 90% would be
+tuning a number until it passes the check that exists to catch it. This is a
+measurement of an error that is currently live, recorded so the recalibration -
+if it happens - is a design decision with its own justification and its own
+held-out period rather than a reflex.

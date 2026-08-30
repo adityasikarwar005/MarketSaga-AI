@@ -164,10 +164,10 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M19** | Data quality gates | L1 | P1 | M16 | | ☑ |
 | **M20** | Source registry & credibility weights | L2 | P2 | M01 | ✅ | ☑ |
 | **M21** | Collector framework | L2 | P2 | M04, M20 | ✅ | ☑ |
-| **M22** | Normaliser & publish-time resolver | L2 | P2 | M21 | | ☐ |
+| **M22** | Normaliser & publish-time resolver | L2 | P2 | M21 | ✅ | ◐ |
 | **M23** | Deduplication | L2 | P2 | M22 | ⚙ | ☐ |
 | **M24** | Economic calendar & consensus | L2 | P2 | M21 | | ☐ |
-| **M25** | Point-in-time event store | L2 | P2 | M22, M16 | | ☐ |
+| **M25** | Point-in-time event store | L2 | P2 | M22, M16 | ✅ | ☑ |
 | **M26** | Relevance gate (tier 1) | L2 | P3 | M25 | ⚙ | ☐ |
 | **M27** | Event classifier (tier 2) | L2 | P3 | M26 | ⚙ | ☐ |
 | **M28** | Entity/geo extraction & KG routing | L2 | P3 | M27 | ⚙ | ☐ |
@@ -718,6 +718,40 @@ provider's terms is not a coding task.
 
 **Built** `libs/ms_news/collectors.py`, `tests/unit/test_collectors.py` (26 tests).
 
+**Two concrete collectors**, `libs/ms_news/feeds.py` with
+`tests/unit/test_feeds.py` (18 tests): RBI press releases and NSE circulars, the
+two `credibility: 1.00` slots in `config/sources.yaml`. Both are ordinary
+syndication feeds - no key, no signup, no paid tier - and both are sources that
+`may_trigger_directional`. The expensive slots in that file, a wire service and
+a social firehose, are the ones that may never open a position alone.
+
+**Both sources stay `enabled: false`.** Writing a collector is an engineering
+task; deciding that a publisher's terms permit storing what it returns is not.
+Constructing `rbi_collector()` does not switch anything on, and every `tos_note`
+in the file still reads TODO.
+
+**A feed is somebody else's XML over the network.** `xml.etree` resolves no
+external entities but still expands internal ones, so a few kilobytes of
+declarations become gigabytes of memory and the collector dies - which under
+`CollectorRunner` is one source going quiet, the failure mode hardest to notice.
+Two guards run before the parser sees anything: a byte cap, and an outright
+refusal of any document carrying a `DOCTYPE`, which a syndication feed has no
+legitimate reason to declare.
+
+**RSS and Atom both, because they disagree about everything.** Atom puts the URL
+in an attribute and RSS in the element text; a parser handling one silently
+drops every url from the other. Dates are RFC 822 in RSS and ISO 8601 in Atom.
+And a `pubDate` with no offset is handed to M22 as *naive plus the source's
+timezone* - never read as UTC, because RBI and NSE publish in IST and the
+five-and-a-half-hour error lands in the direction that makes an item look
+knowable before it was.
+
+**A seen-set, bounded.** Feeds republish their whole window on every poll, so
+without it a five-minute cadence turns one press release into a hundred and
+eighty items with different ingest times, each looking to M23 like a separate
+event. Bounded, because an unbounded set on a process that runs for weeks is a
+leak that only appears after it has been up for weeks.
+
 **Isolation is the whole point, and its failure is misdiagnosed.** A single loop
 letting one exception escape stops every source after the one that threw — and
 the symptom is that the *others* went quiet, which reads as a network problem
@@ -771,6 +805,41 @@ python jobs/audit_timestamps.py --sample 200 --manual-review
 pytest tests/unit/test_publish_time.py -k "prefers_structured or flags_uncertain"
 ```
 
+**Built** `libs/ms_news/normalise.py`, `tests/unit/test_publish_time.py` (21
+tests), `jobs/audit_timestamps.py`. Marked **◐ and not ☑**: the second verify
+line passes, the first cannot. Every source in `config/sources.yaml` is disabled
+pending its terms review, so there is no corpus, and G2's question - 90% of 200
+within five seconds of truth - has no answer yet. `audit_timestamps.py` exits
+non-zero and says so rather than passing on an empty sample, because a verify
+that goes green with no data certifies the gate instead of the system.
+
+**The cascade records which extractor won**, and that field is the module. A
+time from an RSS `pubDate` and one scraped out of prose are different
+measurements with systematically different errors; a corpus that cannot separate
+them can be described as 92% accurate while a guessed third of it is far worse.
+`PublishTimeMethod.trusted` excludes `IN_TEXT` deliberately - it is right often
+enough to be dangerous - so an in-text time is usable, flagged, and never
+counted as measured.
+
+**A naive timestamp is never read as UTC.** Indian sources publish `+0530` and
+some publish nothing; assuming UTC is a 5.5-hour error in the direction that
+makes an item look knowable *before* it was, which is lookahead that reads as
+latency. Either the source declares a timezone and it is applied explicitly, or
+the value is refused to the fallback. A test pins the exact 5:30 that the
+mistake would introduce.
+
+**A publish time after the ingest time is a parse error, not a scoop** - a
+backwards timezone, a day/month swap, a two-digit year. It is rejected rather
+than clamped: clamping produces a plausible timestamp and hides the fault
+forever. A failing candidate does not veto a good one below it, so a publisher
+with a broken `pubDate` and a correct `og:published_time` still yields a
+measurement.
+
+`t_available` is stamped after the pipeline and never before `t_ingest`.
+Availability before arrival is not a possible state, and the gap between the two
+is this system's own latency - which a strategy whose horizon is seconds cannot
+have recorded as zero.
+
 ---
 
 #### M23 · Deduplication ⚙
@@ -816,6 +885,42 @@ pytest tests/unit/test_pit_store.py -k "as_of_excludes_future or backfill_partit
 python jobs/pit_query.py --as-of "2026-07-14T11:03:00+05:30" --hash   # reproducible hash across runs
 ```
 **Done:** 30 days collected, dup rate < 3%, timestamps audited. **This is Gate G2.**
+
+**Built** `libs/ms_news/pit_store.py`, `tests/unit/test_pit_store.py` (19 tests),
+`jobs/pit_query.py`. Both verify lines pass; the digest is identical across
+runs. **G2 is not met and is not close** - the store is empty, because every
+source is still disabled pending its terms review. `pit_query.py` says so rather
+than letting a stable digest over nothing read as a working pipeline.
+
+**`as_of` gates on availability, never on the publish time.** The obvious
+implementation filters `t_event <= t` and is the bug the module exists to
+prevent: an item published at 11:00:00 that the pipeline finished with at
+11:00:04 was *not* knowable at 11:00:01. Four seconds is not a rounding error at
+an event horizon measured in seconds - it is the entire edge, and it shows up as
+a strategy that is astonishingly good at the open. The filter is
+`Timed.known_at`; `t_event` is what the store sorts by and never what it gates
+on.
+
+**Backfill is a separate partition and is excluded by default.** A live
+`t_available` was *measured*; a backfilled one was *reconstructed*, however
+carefully. Same field, two meanings, and the difference is invisible at query
+time - so `AsOfResult` carries which partitions produced it, and a digest over a
+mix is deliberately different from one over either.
+
+**Corrections are appended, and cannot rewrite the past.** A superseding row
+replaces the earlier one only once the correction is *itself* knowable at the
+as-of. Otherwise the store would let history be censored the moment history
+disagreed with it, and `as_of` would stop answering the one question it exists
+for.
+
+**The as-of must carry an offset.** `pit_query.py` refuses a naive one rather
+than assuming UTC - the same five-and-a-half-hour error as the log timestamps
+and the publish-time resolver, arriving this time through a command line.
+
+**No vector index yet, deliberately.** The plan lists pgvector or FAISS on
+embeddings; there are no embeddings until M27. An index over a field nothing
+populates is a dependency and a migration in exchange for nothing. Same
+reasoning as `ms_ops/runner.py` and `ms_ops/registry.py`.
 
 ---
 
@@ -2140,7 +2245,7 @@ Update this table at the end of every sprint. It is the honest picture.
 |---|---:|---:|---:|---:|
 | L0 Foundation | 7 | 7 | 0 | 0 |
 | L1 Market Data | 11 | 11 | 0 | 0 |
-| L2 News & Events | 10 | 2 | 0 | 8 |
+| L2 News & Events | 10 | 3 | 1 | 6 |
 | L3 Impact | 6 | 5 | 0 | 1 |
 | L4 Features | 6 | 4 | 1 | 1 |
 | L5 Models | 12 | 9 | 1 | 2 |
@@ -2149,7 +2254,7 @@ Update this table at the end of every sprint. It is the honest picture.
 | L8 Execution | 6 | 5 | 0 | 1 |
 | L9 Surface | 6 | 5 | 1 | 0 |
 | LX Ops | 6 | 6 | 0 | 0 |
-| **Total** | **81** | **64** | **3** | **14** |
+| **Total** | **81** | **65** | **4** | **12** |
 
 *Counts regenerated from the module rows above, not maintained by hand. They had
 drifted badly: the table read 49/81 while claiming L6 Projection was 0/3 and L8
@@ -2172,7 +2277,7 @@ remain are real work rather than plumbing. The remaining 17 modules are not
 evenly sized and are not evenly hard.
 
 *And it says almost nothing about the only question that matters.* Of the 81
-modules, **five have ever consumed real market data**:
+modules, **8 have ever consumed real market data**:
 
 | | |
 |---|---|
@@ -2180,15 +2285,37 @@ modules, **five have ever consumed real market data**:
 | M14 | bhavcopy loader, run against real UDiFF and legacy files |
 | M15 | cross-asset series, real daily bars |
 | M15b | daily bar loader, ten years of real NIFTY bars |
-| M35 | overnight gap forecaster - **the only model** ever measured on real data |
+| M35 | overnight gap forecaster - measured on real data, and **lost** by 2.4% to a one-variable baseline |
 | M70 | IV surface fitter - run on a real NIFTY chain, and the finding was that daily marks **cannot** support the fit. Consumed real data; not validated on it. |
+| M55 | volatility model - measured on ten years of real NIFTY bars and **does not beat HAR-RV** (+0.0% Parkinson, -0.1% Garman-Klass). Trial 22. |
+| M54 | quantile heads - **does not beat their own Gaussian fallback** on pinball (-2.2% at 1d, -1.3% at 5d), and both under-cover: a 90% band holds 83-85%. Trial 23. |
 
-That is **7%**, and the sixth entry is the one that shows why the count is a
-weak measure. M70 has now been pointed at real prices and the result was a
-negative: 36.9% of the marks it was given price a negative butterfly before any
-model touches them, because NSE sets settlement to the close on everything that
-traded and models it on everything that did not. Consuming real data and being
-validated on it are different events, and only the first has happened.
+That is **10%**, and the last three entries show why the count is a weak
+measure - all three are negatives. M70 found that 36.9% of the marks it was
+given price a negative butterfly before any model touches them. M55 did not beat
+HAR-RV, its own residual booster declining to be kept in three of four folds.
+M54 did not beat its own Gaussian fallback on pinball.
+
+Consuming real data and being validated on it are different events. Eight
+modules have done the first; **three models have now attempted the second and
+all three lost** - M35 by 2.4% to a one-variable baseline, M55 by 0.1% to a
+three-term one, M54 by 2.2% to `sigma * z_alpha`.
+
+*The most useful thing found on real data so far is not a model result.* Both
+M54's fitted heads and the Gaussian they were meant to replace produce a 90%
+band that holds the outcome 80-85% of the time. `jobs/sizing_sensitivity.py`
+carries that through to M75, which sizes against those intervals through two
+channels that compound - the conservative substitution stops being conservative,
+and the uncertainty modifier under-shrinks. The band needs widening by **x1.18**
+to reach nominal, and where a position is taken at all it is **1.09x to 11.38x
+too large**, worst exactly where the interval is widest and the model least
+sure.
+
+That is a finding about L6 and M75 rather than about M54, it is live in the
+current code, and it would not have surfaced on synthetic data whose tails were
+drawn from the distribution being fitted. Nothing has been changed in response:
+widening the heads until coverage reaches 90% would be tuning the number that
+the check exists to catch.
 
 Everything else - direction, volatility, ensemble, meta-labeller, the Greeks
 engine, structures, sizing, the risk gate - has run only on synthetic data where
@@ -2206,10 +2333,12 @@ real option chains within reach without a broker account, which moves roughly
 been"** - the whole L6 projection layer, the L7 decision layer, M54, M55, M59.
 Reachable is not validated, and this document should never let the two be read
 as the same thing. The count of modules that have actually been pointed at real
-data is six, and M70's turn produced a negative result rather than a validation.
-What M70 established is narrower and more useful than a number: the archive
-cannot settle the top of the decision chain at all, and a book-carrying chain
-snapshot from a live feed is the only thing that can.
+data is eight, and the three most recent turns - M70, M55 and M54 - produced
+negative results rather than validations. What M70 established is narrower and more
+useful than a number: the archive cannot settle the top of the decision chain at
+all, and a book-carrying chain snapshot from a live feed is the only thing that
+can. What M55 established is that HAR's three lags exhaust what daily OHLC
+carries about tomorrow's variance.
 
 That is not a criticism of those modules. It is the honest statement of what has
 been *demonstrated* versus what has been *built*, and the two are far apart.
@@ -2291,10 +2420,16 @@ synthetic data, which is the top four-fifths of the decision chain. Settling it
 needs a chain captured with a book - bid and ask at one instant - which moves
 this to depend on the recorder rather than the archive.
 
-**2. Then M55 and M54 on the same data.** Volatility and quantiles are the two
-models the whole projection layer consumes. Neither has seen a real price. Both
-take underlying series rather than option marks, so the finding above does not
-block them - it is specific to fitting a surface across strikes at one instant.
+**2. ~~Then M55 and M54 on the same data.~~ Both done, both negative.**
+
+- `python jobs/eval_volatility.py` - M55 against HAR-RV: +0.0% under Parkinson,
+  -0.1% under Garman-Klass, residual booster kept in one fold of four. Trial 22.
+- `python jobs/eval_quantiles.py` - M54 against its own Gaussian fallback: -2.2%
+  at 1d, -1.3% at 5d. Trial 23.
+
+Both written up in `docs/model_audit.md`. The finding worth carrying forward is
+not either verdict: it is that a 90% band from *either* model holds the outcome
+only 80-85% of the time, so M75 sizes against intervals that are too narrow.
 
 **3. Get a feed - Upstox, Analytics Token.** Free, one year, read-only, no daily
 login. Read-only is a feature here: the recorder cannot place an order even by
@@ -2302,12 +2437,31 @@ accident, which is a stronger guarantee than `MARKETSAGE_ENV` because it is
 enforced at the venue rather than by this repository. The adapter is written and
 mutation-tested; it needs a token.
 
-**4. The recorder - promoted by item 1.** It was on this list as the thing that
-accumulates what cannot be bought later, with the correction below arguing
-against treating that as urgent. Item 1 changes the argument: a book-carrying
-chain snapshot is now the only route to validating the top of the decision
-chain, and the archive cannot substitute for it. The urgency is no longer about
-losing history; it is that four modules stay unverified until this runs.
+**4. The recorder - promoted by item 1, and now built.** It was on this list as
+the thing that accumulates what cannot be bought later, with the correction below
+arguing against treating that as urgent. Item 1 changed the argument: a
+book-carrying chain snapshot is the only route to validating the top of the
+decision chain, and the archive cannot substitute for it. The urgency is no
+longer about losing history; it is that four modules stay unverified until this
+runs.
+
+```bash
+python -m services.ingest_market --source angel --chain
+```
+
+It refuses to run without `--chain`. Ticks replay into candles later; the book
+at an instant does not exist in the tick stream once the instant has passed, so
+a live morning spent without it collects only the recoverable half.
+
+The registry is built from the real scrip master *before* the feed exists,
+because its tokens are what the subscription is made of - nothing is invented
+the way the synthetic path can afford to. Nearest two NIFTY expiries is 374
+contracts against a 3,000 budget. The index and its options quote on different
+segments, `NSE_CM` and `NSE_FO`, and both go into one stream: `ChainBuilder`
+requires the spot captured *with* the chain, and a spot joined afterwards drags
+in a lag that reads as edge in every options backtest.
+
+Run it in market hours. One good snapshot answers item 1.
 
 ---
 
