@@ -1959,3 +1959,118 @@ so both models were fed daily analogues of the five- and thirty-minute features
 does not answer it. A loss is still informative - same code, same baseline, no
 edge on the easier-to-sample horizon - but a win would have proved nothing, and
 the job says so above its own output so the number cannot be quoted loose.
+
+## M23: two defects the tests found in what I had just written
+
+Both were in code that lint, mypy and my own reading had already passed, and
+both were found by tests failing rather than by review.
+
+**The docstring asserted a distance I had not measured.** It said the guard
+exists because "RBI keeps the repo rate unchanged" and "RBI cuts the repo rate
+by 25 bps" have a *small* Hamming distance and would otherwise be merged.
+Measured, they are 27 apart against a threshold of 3, and so is every other pair
+in the labelled set - 12 to 28. SimHash was never going to merge them.
+
+The real finding is worse than the one I claimed. On headline-length text the
+two distributions overlap completely:
+
+    genuine duplicates   11, 16, 24, 26
+    opposite events      12, 15, 17, 20, 21, 27, 28
+
+There is no threshold that admits one and excludes the other. A 3-shingle set
+over an eight-word headline has five members and one changed word moves three of
+them, so the distance stops carrying information at that length. On a 47-word
+body it behaves as intended - byline appended 2, one word changed 7 - which is
+what the layer is actually for.
+
+So `Hamming <= 3` is inherited from web-scale document dedup and does not
+transfer. It is kept as the conservative end of a scale with no safe end, and
+the guard is no longer described as a supplement to it: the guard is the only
+thing that makes any threshold safe to loosen. The docstring now carries the
+measurement instead of the assumption.
+
+**The decisive-word list had a hole shaped like a missing plural.** It was typed
+as inflections and contained "halt" and "halted" but not "halts", so:
+
+    "NSE halts trading in XYZ Ltd"   and   "NSE resumes trading in XYZ Ltd"
+
+were allowed to merge - a halt and its resumption becoming one event, with
+whichever arrived first surviving. Worse, the neighbouring pair in the set
+passed only because one of *its* two words happened to be in the table, which
+looks exactly like the guard working.
+
+Fixed by stemming rather than by adding the missing words, because a
+hand-maintained inflection table is precisely the thing that rots. Two more
+holes surfaced immediately from the same tests - `resumed`, `surged` and
+`plunged` need the silent-e rule - and a meta-test now walks every entry in
+`DECISIVE_STEMS` and asserts its own inflections reduce to it, so adding a word
+without thinking about its endings fails rather than ships.
+
+The pattern is the one this document keeps recording. Neither defect raised
+anything. The first produced a module whose stated justification was false while
+its behaviour was fine; the second produced a guard with a hole that fired
+correctly on four of five test pairs.
+
+## Angel historical candles: three vendor traps and one of mine
+
+M53 is an intraday model and had only ever been measured on daily analogues,
+because there is no intraday history. Angel's historical endpoint is the way to
+get some. Implementing it turned up four things, and the first is mine.
+
+**The Bearer prefix, and why it looked like an expired session.**
+`smartapi-python` stores the raw token on the client and then rewrites the dict
+it hands back:
+
+```python
+self.setAccessToken(jwtToken)                     # raw
+user["data"]["jwtToken"] = "Bearer " + jwtToken   # prefixed
+```
+
+So the value a caller reads out of the response is *not* the value the client is
+using. `AngelSession` stored the prefixed one. Feeding it back through
+`setAccessToken` built `Authorization: Bearer Bearer eyJ...`, and the server
+answered `Invalid Token` (AG8001) - which reads as a stale session and sends the
+investigation to the credentials. It did, for a while.
+
+The tell was that a *fresh login followed by an immediate call on the same
+client* worked, while a cached session on a new client did not. That is not a
+token-lifetime story; it is a token-contents story. `strip_bearer()` now
+normalises at the source, so every later use adds exactly one prefix.
+
+**Prices here are rupees. The websocket sends paise.** Confirmed against real
+data rather than reasoned about:
+
+```
+RELIANCE-EQ  ['2026-08-21T00:00:00+05:30', 1314.0, 1316.0, 1308.0, 1316.0, 5434871]
+```
+
+RELIANCE trades near 1,300. In paise that row would read 131,400. The
+plausibility band cannot separate the two cases - 24,180 and 241.80 are both
+inside it - so `jobs/angel_history.py --cross-check` exists to compare a fetched
+daily series against the ten years of NIFTY bars this project already holds from
+an unrelated provider. Two sources agreeing on the level is the only evidence
+available here.
+
+**The NIFTY index has no candles; equities do.**
+
+```
+NIFTY index (26000, NSE)  -> status True, 0 rows
+RELIANCE-EQ (2885, NSE)   -> status True, 6 rows
+```
+
+Note the status: **True, with nothing in it**. An empty series and a working one
+are the same shape, so an index backfill would have produced a silent hole. The
+front-month future is the usual proxy and its token resolves; whether it returns
+candles is not yet known, because of the next item.
+
+**The throttle answers with an empty body, not a status.** After roughly four
+logins and five candle requests inside ninety seconds, every later request came
+back as `b""` - no code, no message. The SDK reports that as "Couldn't parse the
+JSON response received from the server", which reads as a broken response format
+rather than as throttling, and it persisted for at least half an hour.
+
+A backfill loop is exactly the shape that trips this. `HISTORY_MIN_INTERVAL`
+now paces chunked requests, and the pacing is deliberately **not** a retry: the
+block never says stop, so a retry loop would keep firing at silence. The
+measurement is in the constant's comment so the next person does not have to
+rediscover it by getting blocked.

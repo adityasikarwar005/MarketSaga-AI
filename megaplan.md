@@ -165,7 +165,7 @@ Phase column maps to the gates in `docs/gates.md`. Build strictly top-down withi
 | **M20** | Source registry & credibility weights | L2 | P2 | M01 | ✅ | ☑ |
 | **M21** | Collector framework | L2 | P2 | M04, M20 | ✅ | ☑ |
 | **M22** | Normaliser & publish-time resolver | L2 | P2 | M21 | ✅ | ◐ |
-| **M23** | Deduplication | L2 | P2 | M22 | ⚙ | ☐ |
+| **M23** | Deduplication | L2 | P2 | M22 | ⚙ | ◐ |
 | **M24** | Economic calendar & consensus | L2 | P2 | M21 | | ☐ |
 | **M25** | Point-in-time event store | L2 | P2 | M22, M16 | ✅ | ☑ |
 | **M26** | Relevance gate (tier 1) | L2 | P3 | M25 | ⚙ | ☐ |
@@ -467,6 +467,19 @@ plausibility band was already there; the three-row synthetic fixture the parser
 had been tested against could not have shown it. `strike_to_rupees` is now
 segment-aware, and the `-1` no-strike sentinel that 24,035 equity, future and
 underlying rows carry is handled separately from a price.
+
+**Historical candles**, `historical_candles()` with
+`tests/unit/test_angel_history.py` (28 tests) and `python tasks.py angel-history`.
+The endpoint that can finally supply intraday history - M53 has only ever been
+measured on daily analogues because none exists. Its traps are the inverse of
+the websocket's and are written up in `docs/model_audit.md`: prices are
+**rupees** here and paise there; the JWT arrives with a `Bearer ` prefix the SDK
+does not use internally, so storing it verbatim produces `Bearer Bearer` and an
+`Invalid Token` that reads as an expired session; the **NIFTY index returns zero
+candles with status True** while equities return data, so an index backfill
+would leave a silent hole; and the throttle answers with an **empty body rather
+than a status**, which the SDK reports as a parse error. Requests are paced
+rather than retried, because a block that never says stop cannot be retried past.
 
 `libs/ms_data/upstox.py` is the third, and the one to reach for: the Analytics
 Token is valid for a year and is **read-only**, so an unattended recorder needs
@@ -856,6 +869,43 @@ pytest tests/unit/test_dedup.py -k "exact or near_dup or paraphrase or false_mer
 python jobs/dedup_report.py --days 30    # duplicate rate < 3%, false-merge spot check
 ```
 **Traps:** over-aggressive dedup merges two *different* events on the same topic. Keep a labelled false-merge test set.
+
+**Built** `libs/ms_news/dedup.py`, `tests/unit/test_dedup.py` (42 tests),
+`jobs/dedup_report.py`. Marked **◐**: the first verify line passes, the second
+cannot - there is no corpus, and `dedup_report.py` exits non-zero rather than
+printing the 0.0% duplicate rate an empty run would produce, which would read as
+a clean corpus.
+
+**The Hamming <= 3 threshold does not transfer to headlines, and that was
+measured rather than assumed.** On a 47-word body it behaves: a byline appended
+scores 2 and merges, one word changed scores 7 and does not. On headline-length
+text the genuine-duplicate and opposite-event distance distributions **overlap
+completely**:
+
+    genuine duplicates   11, 16, 24, 26
+    opposite events      12, 15, 17, 20, 21, 27, 28
+
+There is no cut that admits the first and excludes the second. A 3-shingle set
+over an eight-word headline has five members and changing one word moves three
+of them. The `<= 3` in the plan is the number from web-scale document dedup,
+where documents are pages; it is kept because it is the conservative end of a
+scale with no safe end.
+
+**Which makes the false-merge guard the thing doing the work.** Decisive words
+and figures are compared before distance is allowed to merge anything, so
+"RBI keeps the repo rate unchanged" and "RBI cuts the repo rate to 6.25%" cannot
+become one event at any threshold somebody later loosens. `FALSE_MERGE_SET` in
+the tests is the labelled set the plan asks for.
+
+**Layer 3 is not implemented and not stubbed.** There are no embeddings until
+M27, and a layer that always returns "no match" is indistinguishable in the
+output from one that works. `DedupLayer.EMBEDDING` exists so the report can say
+paraphrase detection is *absent* rather than letting a silent zero read as "no
+paraphrases found" - the same reasoning as M25's missing vector index.
+
+**Clusters count distinct sources, not members.** M29 reads this as
+corroboration, and five copies from one wire is one source saying something
+once.
 
 ---
 
