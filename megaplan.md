@@ -1324,13 +1324,42 @@ pytest tests/ml/test_conformal.py -k "coverage_within_tolerance"
 **Done:** with M53/M55 this closes **Gate G5 — the decision gate of the whole project.**
 
 > ### ⚠ If G5 fails
-> Do **not** proceed to L6/L7. Pivot options, in order of preference:
-> 1. **Volatility-only** strategies (M55/M56 targets are far more forecastable — the gate is easier)
-> 2. **Ship the gap product** (M35 + M95) which already passed G4
-> 3. Buy better data (order-book depth, faster sources) and retry **once**
+> Do **not** proceed to L6/L7. Three failed attempts = the honest answer is that
+> this edge does not exist at your data tier. Knowing that at week 24 instead of
+> week 80 is a **success**. Record every failure in the kill criteria log in
+> `docs/gates.md` — a counter nothing increments never fires.
 >
-> Three failed attempts = the honest answer is that this edge does not exist at your data tier.
-> Knowing that at week 24 instead of week 80 is a **success**.
+> **The pivot list below was written before any of these were measured, and two
+> of its three options rested on premises that turned out to be false. Corrected
+> here rather than deleted, because what the plan expected and what happened is
+> the useful comparison.**
+>
+> 1. ~~**Volatility-only** strategies (M55/M56 targets are far more forecastable
+>    — the gate is easier)~~ — **measured, and it is not easier.** M55 on ten
+>    years of real NIFTY bars does not beat HAR-RV: +0.0% under Parkinson, -0.1%
+>    under Garman-Klass, with its own residual booster declining to be kept in
+>    three folds of four. The premise was that volatility is more forecastable
+>    than direction. It is — but HAR-RV already forecasts it, and beating the
+>    published baseline is a different problem from beating noise. Still the
+>    least-bad pivot, and it now needs M56 or intraday data rather than a rerun.
+> 2. ~~**Ship the gap product** (M35 + M95) which already passed G4~~ —
+>    **G4 has not passed.** `docs/gates.md` records it NOT PASSED: -2.4% against
+>    a naive baseline on 2 465 sessions where the gate asks for +10%. This line
+>    was false when written or became false without being updated, and a
+>    contingency plan resting on a gate that did not pass is worse than no
+>    contingency plan. There is no shippable gap product.
+> 3. **Buy better data** (order-book depth, faster sources) and retry **once** —
+>    the only option whose premise survives, and now the one with the most
+>    evidence behind it. Every negative so far has been on daily bars or daily
+>    settlement marks. That is the cheapest data tier there is, and M70's finding
+>    was specifically that it cannot answer the question at all.
+>
+> **A fourth, which the original list did not have.** Nothing above has been run
+> on a chain captured with a book. M70, M71, M72 and M75 are all still verified
+> only against synthetic data, and the recorder that would change that is built
+> and waiting for a trading session. Reaching a pivot decision before that runs
+> would be deciding on the strength of the one data tier already known to be
+> too thin.
 
 ---
 
