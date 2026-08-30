@@ -2367,3 +2367,77 @@ which boundary that is rather than counting schedules.
 point assumed, no fills behind it. Correct statutory rates do not make a fill
 price real, and G0 now lists that separately so fixing the rates cannot be
 mistaken for fixing the cost model.
+
+---
+
+## M63 positioning: two defects in what I had just written, and one wrong story
+
+The module is new, so this section is about defects caught during its own
+construction rather than found later. Both are the house failure mode: a working
+pipeline, plausible numbers, no error.
+
+### Expiry day was treated as zero time to expiry
+
+`gamma_kernel` guarded `t <= 0` by returning `0.0`. `days_to_expiry` is `0` on
+expiry day, so `t = 0/365 = 0`, so **every expiry session scored a gamma
+concentration of exactly zero** — on the one day of the cycle when gamma is at
+its maximum.
+
+Nothing failed. The output was a tidy column of numbers with a few zeros in it,
+which reads as "no open interest near spot" rather than "the function refused".
+What exposed it was a summary statistic: the correlation between concentration
+and days-to-expiry came out **+0.12**, and the mechanism says it must be
+negative. With the zeros repaired it is **−0.82**. A guard clause had flipped
+the sign of the headline relationship.
+
+**Fix.** `EXPIRY_DAY_FRACTION = 0.35` floors the year fraction, and the guard
+now *raises* on a non-positive `t` instead of returning zero. A zero is
+indistinguishable from a real reading once it has been summed; an exception is
+not.
+
+A second version of the bug survived the first test written for it. The test
+asserted `concentration > 0.0`, and substituting `1e-12` for the constant leaves
+concentration enormous and positive, so it passed. The test now pins the
+constant itself — and `year_fraction` was extracted into one function, because
+the profile property and the strike-weighting path computed it separately, which
+meant a test could pin the property while the weighting used a different number.
+
+### The docstring explained the confound with the wrong mechanism
+
+The module exists to divide out the expiry cycle, and the first draft explained
+why like this: *gamma climbs steeply as expiry approaches, so a raw
+gamma-weighted open-interest sum is mostly a restatement of how many days are
+left.*
+
+That is wrong, and it is the kind of wrong that survives review because it
+sounds like the textbook. Gamma is a density in strike. Summed over a fixed
+strike grid it is **conserved** as time to expiry falls — the peak gets taller
+and narrower and the total does not move. On a synthetic chain with uniform open
+interest the statistic is flat across the whole cycle to five decimal places,
+which is now a test.
+
+The real mechanism is an interaction. Open interest is peaked at the money, and
+the kernel *narrows onto that peak* as expiry nears: far out it averages open
+interest over a wide band, close in it sees little but the peak. Decomposed on
+64 real NIFTY sessions:
+
+| | corr with days-to-expiry |
+|---|---|
+| concentration | −0.83 |
+| total open interest (level) | −0.72 |
+| concentration ÷ total open interest (shape) | −0.82 |
+
+Both channels are real, and the shape channel is the larger one. That has a
+practical consequence: **normalising by total open interest would remove the
+smaller confound and leave the bigger one in place**, while looking like it had
+handled the problem. Anyone reading the original docstring would have reached
+for exactly that normalisation.
+
+### What this says about the module's own claims
+
+The kernel bandwidth is not fitted, and a bandwidth chosen to make a result
+appear is precisely the defect this file catalogues. Asserting "sigma is not a
+tuning knob" in a docstring is worth nothing, so
+`concentration_is_robust_to_sigma` measures it: the rank ordering of days must
+survive a change of bandwidth, and the test requires that correlation above
+0.95. If the ordering moved, the docstring would be the thing that was wrong.
