@@ -1910,6 +1910,12 @@ measurement of an error that is currently live, recorded so the recalibration -
 if it happens - is a design decision with its own justification and its own
 held-out period rather than a reflex.
 
+*Later correction.* The single widening factor used here averages over regimes
+that are wrong in opposite directions - the band is too wide in the quiet
+tercile and too narrow in the busy one - so "too large" describes the busy half
+and inverts the quiet one. See "The sizing error changes sign between regimes"
+below.
+
 ## M53 had no Verify block, and has now been measured against its own baseline
 
 `direction.py` opens by calling itself "the first learned model that has to beat
@@ -2185,3 +2191,41 @@ extrapolation that is flagged but not solved. And three buckets over a 600-row
 calibration block is 200 rows each, which is above the floor and not comfortably
 so. Splitting a calibration set does not create information, and the refusal
 below `MIN_CALIBRATION_ROWS` per bucket is the guard for that.
+
+## The sizing error changes sign between regimes, and I reported one direction
+
+`jobs/sizing_sensitivity.py` reported "positions 1.09x to 11.38x too large" from
+a single widening factor of x1.18. Mondrian's per-bucket scales say that number
+was an average over two errors pointing opposite ways.
+
+At horizon 5 on real bars, scales x0.803 / x1.035 / x1.188:
+
+| regime | band is | positions | worst ratio |
+|---|---|---|---|
+| quiet | 19.7% too **wide** | too **small** | 0.44x, and one trade missed entirely |
+| mid | 3.5% too narrow | slightly large | 1.25x |
+| busy | 18.8% too **narrow** | too **large** | **20.42x** |
+
+**Only one half costs money.** An over-wide band in a quiet regime declines
+positions it should have taken; that is opportunity, it never appears in a P&L,
+and it is therefore the half that goes uncorrected indefinitely. An under-wide
+band in a busy regime sizes up on exactly the days the tail arrives.
+
+The single-factor version could not say this. It took a global widening factor
+and applied it everywhere, so the quiet tercile's over-width was folded into the
+same "too large" verdict as the busy tercile's under-width - and the direction
+that was reported is the one that happened to dominate the average.
+
+**A case the earlier job had no name for.** It separated "flat either way" from
+"should be flat" - the band so narrow that the honest interval removes the edge
+while the system takes the position anyway. The mirror is now labelled `MISSED`:
+an over-wide band shrinking the edge to nothing, so the system sits out a trade
+the honest interval would have taken. It costs nothing measurable, which is
+exactly why it needed a name.
+
+**What has not changed.** No interval is widened, no scale is applied in
+production, and M75 still sizes against the raw heads. This is a measurement of
+a live error with the per-regime factors taken from a calibration block that the
+measurement does not include. Whether to route Mondrian scales into M75 is a
+decision about the live sizing path and belongs with the risk limits, not with a
+diagnostic job.
