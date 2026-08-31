@@ -548,30 +548,32 @@ class ConvexityCheck:
         ]
 
 
-def negative_butterflies(
-    records: Sequence[OptionRecord], *, price_field: str = "settlement"
+def convexity_of(
+    rows: Sequence[tuple[date, OptionType, float, float]], *, price_label: str = "pricing"
 ) -> ConvexityCheck:
-    """Convexity in strike, per expiry and option type, on the raw marks.
+    """Convexity in strike, per expiry and option type, on whatever marks it is given.
+
+    ``rows`` is ``(expiry, opt_type, strike, price)``. Kept separate from
+    :func:`negative_butterflies` so the same arithmetic serves a bhavcopy of
+    settlement marks and a recorded book of mids - the comparison between those
+    two is the whole reason the check exists, and it is only a comparison if
+    both sides are measured by one function.
 
     Only equally spaced triples are tested. NIFTY lists 50-point strikes near
     the money and 100-point strikes in the wings, and a triple that straddles
     the change is not required to be convex by this inequality - counting it
     would manufacture violations that are an artefact of the strike ladder.
     """
-    if price_field not in ("settlement", "close"):
-        raise ValueError(f"price_field must be 'settlement' or 'close', not {price_field!r}")
-
     groups: dict[tuple[date, OptionType], list[tuple[float, float]]] = {}
-    for r in records:
-        px = r.settlement if price_field == "settlement" else r.close
-        groups.setdefault((r.expiry, r.opt_type), []).append((r.strike, px))
+    for expiry, opt_type, strike, px in rows:
+        groups.setdefault((expiry, opt_type), []).append((strike, px))
 
     triples = violations = 0
     worst = 0.0
     detail = "none"
-    for (expiry, opt_type), rows in groups.items():
-        rows.sort()
-        for (k1, c1), (k2, c2), (k3, c3) in zip(rows, rows[1:], rows[2:], strict=False):
+    for (expiry, opt_type), grouped in groups.items():
+        grouped.sort()
+        for (k1, c1), (k2, c2), (k3, c3) in zip(grouped, grouped[1:], grouped[2:], strict=False):
             if abs((k2 - k1) - (k3 - k2)) > 1e-6:
                 continue
             triples += 1
@@ -582,9 +584,29 @@ def negative_butterflies(
                     worst = butterfly
                     detail = (
                         f"{expiry} {opt_type} {k1:.0f}/{k2:.0f}/{k3:.0f} "
-                        f"settling {c1:.2f}/{c2:.2f}/{c3:.2f}"
+                        f"{price_label} {c1:.2f}/{c2:.2f}/{c3:.2f}"
                     )
     return ConvexityCheck(triples=triples, violations=violations, worst=worst, worst_detail=detail)
+
+
+def negative_butterflies(
+    records: Sequence[OptionRecord], *, price_field: str = "settlement"
+) -> ConvexityCheck:
+    """Convexity of a bhavcopy's daily marks, before any model touches them."""
+    if price_field not in ("settlement", "close"):
+        raise ValueError(f"price_field must be 'settlement' or 'close', not {price_field!r}")
+    return convexity_of(
+        [
+            (
+                r.expiry,
+                r.opt_type,
+                r.strike,
+                r.settlement if price_field == "settlement" else r.close,
+            )
+            for r in records
+        ],
+        price_label="settling",
+    )
 
 
 def chain_from_records(

@@ -1,7 +1,9 @@
 """M70 - the surface report: fit RMSE per expiry, and the rejected-quote rate.
 
-    python jobs/surface_report.py --date 2026-08-27
-    python jobs/surface_report.py --demo           # a synthetic chain, no data needed
+    python jobs/surface_report.py --date 2026-08-27                      the F&O bhavcopy
+    python jobs/surface_report.py --date 2026-08-31 --source recorded    a live recorded book
+    python jobs/surface_report.py --date 2026-08-31 --source recorded --at 11:30
+    python jobs/surface_report.py --demo                                 synthetic, no data needed
 
 Two numbers per expiry, and the second one is the one that gets ignored.
 
@@ -27,8 +29,9 @@ import argparse
 import math
 import sys
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -40,11 +43,20 @@ from libs.ms_data.bhavcopy import (
     BhavcopyStore,
     ConvexityCheck,
     chain_from_records,
+    convexity_of,
     negative_butterflies,
 )
 from libs.ms_data.holidays import HolidayStore
+from libs.ms_data.recorder import DATA_ROOT
 from libs.ms_options.pricing import OptType, black76_price
 from libs.ms_options.surface import PriceBasis, Surface, SVIParams, fit_surface
+
+IST = ZoneInfo("Asia/Kolkata")
+
+# One snapshot is about 40 KB, and a full session is a few hundred megabytes
+# by the close. Reading the last 40 MB reaches roughly the final thousand
+# snapshots, which is every instant anybody fits and none of the morning.
+RECORDED_TAIL_BYTES = 40_000_000
 
 ROOT = Path(__file__).resolve().parents[1]
 CHAIN_DIR = ROOT / "data" / "raw"
@@ -199,6 +211,145 @@ def load_chain(day: date, *, symbol: str = "NIFTY") -> tuple[ChainSnapshot, Prov
     )
 
 
+@dataclass(frozen=True)
+class RecordedProvenance:
+    """A chain read from the recorder's own partitions, not from the archive.
+
+    The counterpart to :class:`Provenance`, and almost every warning that one
+    carries is absent here - which is the whole point and is worth stating
+    rather than leaving as an absence. A recorded snapshot is a two-sided book
+    captured at one instant, so the mid rule holds and `PriceBasis.MID` applies
+    unchanged. There is no settlement mark, no exchange model output standing in
+    for a contract that never traded, and no set of prices assembled across a
+    session and called simultaneous.
+
+    What it is not is a photograph of the close. It is one instant chosen out of
+    a session, so a fit from it is not comparable day-over-day with a bhavcopy
+    fit, and two instants from the same morning are not independent observations
+    of anything.
+    """
+
+    symbol: str
+    day: date
+    token: int
+    snapshot_ts: datetime
+    quotes: int
+    strikes: int
+    expiries: list[date]
+    completeness: float
+    snapshots_available: int
+    missing_book: int
+    convexity: ConvexityCheck
+
+    def render(self) -> list[str]:
+        return [
+            f"  REAL chain: {self.symbol} recorded live book for {self.day}.",
+            f"    snapshot {self.snapshot_ts.astimezone(IST):%H:%M:%S} IST, "
+            f"one of {self.snapshots_available:,} on file, completeness "
+            f"{self.completeness:.0%}.",
+            f"    {self.quotes:,} quotes across {self.strikes} strikes and "
+            f"{len(self.expiries)} expiries "
+            f"({', '.join(str(e) for e in self.expiries)}).",
+            f"    {self.missing_book:,} quotes carry no two-sided book.",
+            "",
+            "  Convexity of the marks themselves, before any model touches them -",
+            "  the same measurement, by the same function, that the bhavcopy path",
+            "  reports. This is the comparison M70 exists to make:",
+            *self.convexity.render(),
+            "",
+            "  This is the input M70 said it needed and did not have.",
+            "    Every price below is a MID from a book quoted at one instant, so",
+            "    none of the settlement caveats apply: no exchange model output",
+            "    standing in for a contract that never traded, and no prices",
+            "    assembled across a session and called simultaneous.",
+            "",
+            "    Two things it is still not. It is one instant out of a session,",
+            "    not a close, so this fit is not comparable day-over-day with a",
+            "    bhavcopy fit. And the instrument is the vendor's token",
+            f"    ({self.token}), not the id in config/instruments.yaml - the live",
+            "    path and the research layer have not been reconciled.",
+        ]
+
+
+def load_recorded_chain(
+    day: date,
+    *,
+    symbol: str = "NIFTY",
+    root: Path | None = None,
+    at: time | None = None,
+) -> tuple[ChainSnapshot, RecordedProvenance]:
+    """One snapshot out of a live recording, for M70 to fit.
+
+    The archive loader above is the only way M70 could reach real data, and a
+    bhavcopy has no book - which is exactly the finding M70 reported and could
+    not act on. This is the other door.
+
+    ``at`` picks the last snapshot at or before that exchange-local time;
+    without it the most recent complete snapshot is used. Snapshots with no
+    quotes are skipped rather than returned: the first few of a session are
+    empty while the builder fills, and fitting one would report "no expiry had
+    enough usable quotes" for a recording that is fine.
+    """
+    from jobs.live_state import discover_token, tail_lines
+
+    base = root or DATA_ROOT
+    token = discover_token(base, day)
+    if token is None:
+        raise SystemExit(
+            f"  no recorded chain for {day} under {base}. Record one with "
+            "`python tasks.py record angel --chain`, or pass --source bhavcopy."
+        )
+
+    path = base / "chain" / f"date={day.isoformat()}" / f"chain-{token}.ndjson"
+    snaps: list[ChainSnapshot] = []
+    for line in tail_lines(path, RECORDED_TAIL_BYTES):
+        try:
+            snap = ChainSnapshot.model_validate_json(line)
+        except Exception:
+            continue  # a half-written final line while the recorder is running
+        if snap.quotes:
+            snaps.append(snap)
+    if not snaps:
+        raise SystemExit(
+            f"  {path.name} holds no snapshot with quotes in its last "
+            f"{RECORDED_TAIL_BYTES // 1_000_000} MB."
+        )
+
+    if at is not None:
+        cutoff = datetime.combine(day, at, tzinfo=IST)
+        eligible = [s for s in snaps if s.ts.astimezone(IST) <= cutoff]
+        if not eligible:
+            raise SystemExit(
+                f"  no snapshot at or before {at:%H:%M} IST; the earliest on file is "
+                f"{snaps[0].ts.astimezone(IST):%H:%M:%S}."
+            )
+        chosen = eligible[-1]
+    else:
+        chosen = snaps[-1]
+
+    strikes = {q.strike for q in chosen.quotes}
+    return chosen, RecordedProvenance(
+        symbol=symbol,
+        day=day,
+        token=token,
+        snapshot_ts=chosen.ts,
+        quotes=len(chosen.quotes),
+        strikes=len(strikes),
+        expiries=sorted({q.expiry.astimezone(IST).date() for q in chosen.quotes}),
+        completeness=chosen.completeness,
+        snapshots_available=len(snaps),
+        missing_book=sum(1 for q in chosen.quotes if q.mid is None),
+        convexity=convexity_of(
+            [
+                (q.expiry.astimezone(IST).date(), q.opt_type, q.strike, q.mid)
+                for q in chosen.quotes
+                if q.mid is not None
+            ],
+            price_label="quoted at",
+        ),
+    )
+
+
 def report(surface: Surface, *, now: datetime) -> str:
     lines = [surface.render(), ""]
 
@@ -250,6 +401,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", type=date.fromisoformat, help="the recorded day to fit")
     parser.add_argument("--demo", action="store_true", help="fit a synthetic chain instead")
     parser.add_argument("--symbol", default="NIFTY", help="underlying to fit (default NIFTY)")
+    parser.add_argument(
+        "--source",
+        choices=("bhavcopy", "recorded"),
+        default="bhavcopy",
+        help="where the chain comes from; `recorded` reads a live snapshot off the recorder",
+    )
+    parser.add_argument(
+        "--at",
+        type=time.fromisoformat,
+        help="recorded only: the last snapshot at or before this exchange-local time (HH:MM)",
+    )
     parser.add_argument("--strict", action="store_true", help="exit non-zero if arbitrage is found")
     args = parser.parse_args(argv)
 
@@ -261,7 +423,18 @@ def main(argv: list[str] | None = None) -> int:
         chain = demo_chain(now)
         basis = PriceBasis.MID
         print("  SYNTHETIC chain with a known smile - not real market data.")
+    elif args.date and args.source == "recorded":
+        chain, rec_prov = load_recorded_chain(args.date, symbol=args.symbol, at=args.at)
+        now = chain.ts
+        # MID, not SETTLEMENT. A recorded snapshot is a two-sided book quoted at
+        # one instant, which is the basis the surface was written for and the
+        # one the archive could never supply.
+        basis = PriceBasis.MID
+        for line in rec_prov.render():
+            print(line)
     elif args.date:
+        if args.at is not None:
+            parser.error("--at applies to --source recorded; a bhavcopy has one price per day")
         now = datetime.combine(args.date, datetime.min.time(), tzinfo=UTC)
         chain, prov = load_chain(args.date, symbol=args.symbol)
         basis = PriceBasis.SETTLEMENT
