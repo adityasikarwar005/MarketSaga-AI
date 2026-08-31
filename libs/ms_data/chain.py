@@ -336,6 +336,21 @@ class ChainBuilder:
     def spot(self) -> float | None:
         return self._spot
 
+    @property
+    def last_snapshot_at(self) -> datetime | None:
+        """When this builder last produced a snapshot.
+
+        Exposed for the recorder's watchdog. Feed health measures whether *any*
+        message is arriving, and a partially-alive feed satisfies that while the
+        one instrument the chain is built around has gone quiet - which is what
+        happened on 2026-08-31, twice.
+        """
+        return self._last_snapshot
+
+    @property
+    def snapshot_seconds(self) -> float:
+        return self._spec.snapshot_seconds
+
 
 def minutes_to_expiry(calendar: SessionCalendar, now: datetime, expiry: date) -> float:
     """Trading minutes remaining, not calendar minutes.
