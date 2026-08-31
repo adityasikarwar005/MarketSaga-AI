@@ -37,7 +37,6 @@ from libs.ms_data.chain import (
 )
 from libs.ms_data.feed import (
     FeedHealth,
-    FeedState,
     MarketFeed,
     SyntheticFeed,
     SyntheticInstrument,
@@ -177,6 +176,19 @@ def build_angel_feed(clock: Clock, *, index_token: int, option_tokens: list[int]
 MISSED_SNAPSHOTS_BEFORE_HALT = 12
 
 
+def _session_is_open(health: FeedHealth) -> bool:
+    """Whether the exchange is trading, off the health object's own calendar."""
+    from libs.ms_core.clock import SessionState
+
+    try:
+        return health.calendar.state(health.clock.now()) is SessionState.OPEN
+    except LookupError:
+        # No calendar for that year. `FeedHealth.evaluate` refuses to infer a
+        # state it cannot justify and so does this: a watchdog that halts on a
+        # missing holiday file would kill every session of an unloaded year.
+        return False
+
+
 def _start_feed_watchdog(
     feed: MarketFeed,
     health: FeedHealth,
@@ -202,6 +214,16 @@ def _start_feed_watchdog(
     matters: `_stop` is only tested inside the `for` loop body, which a silent
     feed never enters. `feed.close()` ends the generator itself, so the `finally`
     block runs and the session's buffers reach the disk.
+
+    **Read the measurement, never the latched state.** `FeedHealth.state` does
+    not come back from HALTED - `on_message` recovers STALE, CONNECTING and
+    DISCONNECTED and deliberately not that one, because a halt is meant to
+    require an explicit decision to lift. Correct for a trading halt, and a trap
+    for a watchdog: polling `evaluate()` turned the first three-second lull of a
+    session into a permanent kill. Run 2 of the supervised recording died after
+    5.8 minutes reporting `silence_seconds: 0.0`, which is what a one-way latch
+    looks like from the outside. The latch is not the bug and must not be
+    unlatched to suit this loop; reading `silence_seconds()` is the fix.
 
     **Feed health alone is not enough, and the second stall proved it.** It asks
     whether *any* message arrived. When the socket dropped at 10:58 the vendor
@@ -246,11 +268,19 @@ def _start_feed_watchdog(
                 )
                 feed.close()
                 return
-            if health.evaluate() is FeedState.HALTED:
+            silence = health.silence_seconds()
+            health.evaluate()  # keeps the metric and the log line, decides nothing here
+            # Silence only means something while the market is open. `evaluate`
+            # checked that and this loop stopped calling it for its verdict, so
+            # the check has to be made here - dropping it fired the watchdog
+            # before the open, which a test caught immediately.
+            if not _session_is_open(health):
+                continue
+            if silence is not None and silence > health.staleness_halt_seconds:
                 log.error(
                     "feed silent past the halt threshold - closing the recording",
                     fields={
-                        "silence_seconds": round(health.silence_seconds() or 0.0, 1),
+                        "silence_seconds": round(silence, 1),
                         "halt_after": health.staleness_halt_seconds,
                     },
                 )
