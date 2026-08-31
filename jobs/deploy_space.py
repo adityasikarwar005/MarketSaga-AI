@@ -3,7 +3,7 @@
     python jobs/deploy_space.py --check          what would go, and what would not
     python jobs/deploy_space.py --space USER/NAME
 
-The workspace is four static files and a README, so this is a static Space and
+The workspace is a handful of static files, so this is a static Space and
 needs no runtime. `pip install -e ".[deploy]"` first.
 
 **A free Space is public.** Everything on the page becomes readable by anyone
@@ -34,7 +34,51 @@ SPACE_DIR = ROOT / "services" / "dashboard"
 # Only these are published. An allowlist rather than an ignore list: a new file
 # dropped into the directory is excluded until somebody adds it here, which is
 # the safer direction for a folder that gets uploaded to a public URL.
-PUBLISHED = ("README.md", "index.html", "app.css", "app.js", "data.js")
+PUBLISHED = (
+    "README.md",
+    "index.html",
+    "site.css",
+    "desk.html",
+    "app.css",
+    "app.js",
+    "data.js",
+)
+
+# `live.html` is deliberately absent. It polls `/api/live`, which is served by
+# the local dashboard process reading the recorder's own partitions - a static
+# Space has neither. Published, it would render an endpoint error to everyone
+# who opened it: correct behaviour for that page, and a useless thing to host.
+HELD_BACK = {"live.html": "needs the local /api/live endpoint and recorded data"}
+
+
+def missing_dependencies() -> list[str]:
+    """Local files a published page needs that are not themselves published.
+
+    An allowlist fails safe for secrets and silently for correctness. When M91
+    split the dashboard in two, `index.html` became a front door referencing
+    `site.css` and `desk.html`, and neither was added here - so the Space went
+    on serving the old single page, and the next upload would have put the new
+    front door up without its stylesheet or the page it links to. Nothing would
+    have errored; the page would simply have arrived unstyled.
+
+    Only relative references count. A font on a CDN is not this script's
+    business, and treating it as one would make the check noisy enough to skip.
+    """
+    import re
+
+    wanted: list[str] = []
+    for name in PUBLISHED:
+        page = SPACE_DIR / name
+        if page.suffix != ".html" or not page.exists():
+            continue
+        text = page.read_text(encoding="utf-8", errors="ignore")
+        for ref in re.findall(r'(?:href|src)="([^"]+)"', text):
+            if ref.startswith(("http://", "https://", "//", "#", "data:", "mailto:")):
+                continue
+            target = ref.split("?")[0].split("#")[0].strip()
+            if target and target not in ("./", "/") and target not in PUBLISHED:
+                wanted.append(f"{name} -> {target}")
+    return sorted(set(wanted))
 
 
 def _token_from_env() -> str | None:
@@ -94,6 +138,20 @@ def check() -> int:
     extra = sorted(p.name for p in SPACE_DIR.iterdir() if p.is_file() and p.name not in PUBLISHED)
     if extra:
         print(f"\n  not published (not on the allowlist): {', '.join(extra)}")
+    for name, why in HELD_BACK.items():
+        if (SPACE_DIR / name).exists():
+            print(f"    {name}: held back on purpose - {why}")
+
+    broken = missing_dependencies()
+    if broken:
+        print("\n  BLOCKED: a published page references a file that is not published:")
+        for line in broken:
+            print(f"    {line}")
+        print(
+            "  Uploading this would put a page up without something it needs.\n"
+            "  Add the file to PUBLISHED, or stop referencing it."
+        )
+        return 1
 
     print(
         "\n  What becomes public:\n"
@@ -101,7 +159,7 @@ def check() -> int:
         "    - Gate G4 and G7 shown failing, which is the current measured state\n"
         "    - the session snapshot in data.js, which is synthetic throughout\n"
         "\n  What does not: no credentials, no broker keys, no recorded market\n"
-        "  data, no experiment log. The Space is the five files above and nothing\n"
+        "  data, no experiment log. The Space is the files above and nothing\n"
         "  else in this repository."
     )
     return 0
@@ -129,7 +187,8 @@ def deploy(space: str, *, private: bool, yes: bool) -> int:
     source = ".env" if token else "credential store"
     print(f"\n  logged in as {me.get('name', '?')}  (token from {source})")
     print(f"  target: {space}  ({'private' if private else 'PUBLIC'})")
-    check()
+    if check() != 0:
+        return 1
 
     if not yes:
         print(
