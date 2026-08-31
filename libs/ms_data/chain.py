@@ -34,6 +34,7 @@ from libs.ms_options.pricing import (
     implied_vol,
     put_call_parity_gap,
 )
+from libs.ms_options.surface import synthetic_forward
 
 log = get_logger(__name__)
 
@@ -217,7 +218,7 @@ class ChainBuilder:
                 wanted.add((expiry, strike, OptionType.CE))
                 wanted.add((expiry, strike, OptionType.PE))
 
-        fresh: list[OptionQuote] = []
+        collected: list[tuple[OptionQuote, OptionInstrument]] = []
         stale = 0
         for instrument_id, live in self._quotes.items():
             contract = self._registry.get(instrument_id)
@@ -227,7 +228,14 @@ class ChainBuilder:
             if age > self._spec.max_quote_age_seconds:
                 stale += 1
                 continue
-            fresh.append(self._with_iv(live.quote, contract, now, today))
+            collected.append((live.quote, contract))
+
+        # One forward per expiry, taken from the book, before any volatility is
+        # solved. It has to be done here rather than inside `_with_iv`: parity
+        # needs the call and the put together, and a per-quote helper only ever
+        # sees one of them.
+        forwards = self._forwards(collected, now)
+        fresh = [self._with_iv(q, c, now, today, forwards) for q, c in collected]
 
         completeness = len(fresh) / len(wanted) if wanted else 0.0
         self._last_snapshot = now
@@ -256,8 +264,48 @@ class ChainBuilder:
             completeness=min(1.0, completeness),
         )
 
+    def _forwards(
+        self, collected: list[tuple[OptionQuote, OptionInstrument]], now: datetime
+    ) -> dict[date, float]:
+        """The forward each expiry's own book is quoting, where it will support one.
+
+        Expiries absent from the result fall back to `forward_from_spot`, which
+        is the model forward and was for a while the only one used. On the first
+        live NIFTY session that was twenty points below what the book was
+        actually quoting, and twenty points of moneyness split every call IV
+        from its own put by up to ten volatility points - see
+        `synthetic_forward` for the arithmetic and `docs/model_audit.md` for
+        what it did to the skew feature downstream. That function already existed,
+        in the module M70 fits surfaces with, and already said in its own
+        docstring that the textbook forward is wrong for an index. This builder
+        simply was not calling it.
+        """
+        if self._spot is None:
+            return {}
+        by_expiry: dict[date, list[OptionQuote]] = {}
+        for quote, contract in collected:
+            by_expiry.setdefault(contract.expiry, []).append(quote)
+
+        out: dict[date, float] = {}
+        for expiry, quotes in by_expiry.items():
+            t = minutes_to_expiry(self._cal, now, expiry) / MINUTES_PER_YEAR
+            if t <= 0:
+                continue
+            estimate = synthetic_forward(quotes, spot=self._spot, r=self._spec.risk_free_rate, t=t)
+            # The fallback is `spot * exp(rT)`, which `_with_iv` would have
+            # reached on its own. Keeping only the parity estimates leaves one
+            # place where that decision is made instead of two that can drift.
+            if estimate.method.startswith("put-call parity"):
+                out[expiry] = estimate.forward
+        return out
+
     def _with_iv(
-        self, quote: OptionQuote, contract: OptionInstrument, now: datetime, today: date
+        self,
+        quote: OptionQuote,
+        contract: OptionInstrument,
+        now: datetime,
+        today: date,
+        forwards: dict[date, float] | None = None,
     ) -> OptionQuote:
         """Attach implied volatility, computed from mid and only when solvable."""
         if not self._compute_iv or self._spot is None:
@@ -271,7 +319,9 @@ class ChainBuilder:
         if t <= 0:
             return quote
         r = self._spec.risk_free_rate
-        fwd = forward_from_spot(self._spot, r, t)
+        fwd = (forwards or {}).get(contract.expiry)
+        if fwd is None:
+            fwd = forward_from_spot(self._spot, r, t)
         iv = implied_vol(
             mid,
             fwd,
