@@ -350,3 +350,157 @@ def test_snapshot_is_deterministic(spec, registry, calendar):
     # trace_id is per-message provenance, not data - exclude it at every level.
     without_ids = {"trace_id": True, "quotes": {"__all__": {"trace_id"}}}
     assert a.model_dump_json(exclude=without_ids) == b.model_dump_json(exclude=without_ids)
+
+
+# ----------------------------------------------- the forward the book quotes
+BASIS_SPOT = 24_000.0
+BASIS_FORWARD = 24_040.0  # about twenty points above the model forward, as the live book was
+BASIS_VOL = 0.13
+
+
+def _basis_chain(calendar, now, expiry, *, spot=BASIS_SPOT, forward=BASIS_FORWARD):
+    """A book priced at `forward`, which is deliberately not `spot * exp(r*t)`.
+
+    The synthetic chain feed prices off `forward_from_spot`, so a book built by
+    it agrees with the model forward by construction and cannot show this class
+    of error at all. That is why these quotes are built by hand.
+    """
+    from libs.ms_data.chain import MINUTES_PER_YEAR
+    from libs.ms_options.pricing import OptType, black76_price
+
+    strikes = [spot + 50.0 * i for i in range(-8, 9)]
+    contracts, ticks = [], []
+    t = minutes_to_expiry(calendar, now, expiry) / MINUTES_PER_YEAR
+    token = 9000
+    for strike in strikes:
+        for opt, kind in ((OptionType.CE, OptType.CALL), (OptionType.PE, OptType.PUT)):
+            token += 1
+            contracts.append(OptionInstrument(token, UNDERLYING, expiry, strike, opt))
+            fair = black76_price(forward, strike, BASIS_VOL, t, 0.065, kind)
+            ticks.append(
+                Tick(
+                    ts=now,
+                    instrument_id=token,
+                    ltp=fair,
+                    bid=fair - 0.05,
+                    ask=fair + 0.05,
+                    oi=1000,
+                )
+            )
+    return OptionRegistry(contracts), ticks
+
+
+def test_a_call_and_its_put_agree_on_volatility(calendar):
+    """The invariance that would have caught this, and did not exist.
+
+    Put-call parity is not a modelling opinion: at one strike and one expiry a
+    call and a put are the same volatility seen twice. If the two disagree, the
+    forward used to invert them is wrong, and nothing else can cause it.
+
+    On the first live NIFTY session every call came out above its own put - 1.7
+    volatility points at the money, 10.8 in the wings - because the builder
+    priced against `spot * exp(r*t)` while the book was quoting a forward
+    twenty points higher. Every downstream reader saw that as skew.
+    """
+    now = ist(9, 20)
+    expiry = TEST_DAY + timedelta(days=2)
+    registry, ticks = _basis_chain(calendar, now, expiry)
+    spec = ChainSpec(underlying_id=UNDERLYING, n_expiries=1, strikes_per_side=8)
+    builder = ChainBuilder(spec, registry, calendar)
+
+    builder.on_tick(Tick(ts=now, instrument_id=UNDERLYING, ltp=BASIS_SPOT))
+    for tick in ticks:
+        builder.on_tick(tick)
+    snap = builder.snapshot(now)
+    assert snap is not None
+
+    pairs = {}
+    for q in snap.quotes:
+        if q.iv is not None:
+            pairs.setdefault(q.strike, {})[q.opt_type] = q.iv
+    both = {k: v for k, v in pairs.items() if len(v) == 2}
+    assert len(both) >= 8, f"only {len(both)} strikes inverted on both sides"
+
+    for strike, sides in sorted(both.items()):
+        call, put = sides[OptionType.CE], sides[OptionType.PE]
+        assert call == pytest.approx(put, abs=0.005), (
+            f"strike {strike:.0f}: call IV {call:.4f} against put IV {put:.4f}. "
+            "A call and a put at one strike are the same volatility; a gap here "
+            "means the forward they were inverted against is wrong."
+        )
+
+
+def test_the_recovered_volatility_is_the_one_the_book_was_priced_with(calendar):
+    """Agreeing with each other is not enough - they must agree with the truth.
+
+    Two IVs inverted against the same wrong forward can still match one another
+    at the money while both being wrong, so the level is pinned as well as the
+    symmetry.
+    """
+    now = ist(9, 20)
+    expiry = TEST_DAY + timedelta(days=2)
+    registry, ticks = _basis_chain(calendar, now, expiry)
+    builder = ChainBuilder(
+        ChainSpec(underlying_id=UNDERLYING, n_expiries=1, strikes_per_side=8), registry, calendar
+    )
+    builder.on_tick(Tick(ts=now, instrument_id=UNDERLYING, ltp=BASIS_SPOT))
+    for tick in ticks:
+        builder.on_tick(tick)
+    snap = builder.snapshot(now)
+    assert snap is not None
+
+    near = [q.iv for q in snap.quotes if q.iv is not None and abs(q.strike - BASIS_FORWARD) <= 200]
+    assert near
+    for iv in near:
+        assert iv == pytest.approx(BASIS_VOL, abs=0.01)
+
+
+def test_the_model_forward_is_what_splits_them(calendar):
+    """A detector nobody has watched fire is not a detector.
+
+    Inverting the same book against `spot * exp(r*t)` - what the builder did
+    before - has to reproduce the split, or the test above would pass for
+    reasons unrelated to the fix.
+    """
+    from libs.ms_data.chain import MINUTES_PER_YEAR
+    from libs.ms_options.pricing import OptType, black76_price, forward_from_spot, implied_vol
+
+    now = ist(9, 20)
+    expiry = TEST_DAY + timedelta(days=2)
+    t = minutes_to_expiry(calendar, now, expiry) / MINUTES_PER_YEAR
+    model_fwd = forward_from_spot(BASIS_SPOT, 0.065, t)
+    assert model_fwd < BASIS_FORWARD - 20, "the fixture must have a basis worth detecting"
+
+    strike = BASIS_SPOT
+    call_mid = black76_price(BASIS_FORWARD, strike, BASIS_VOL, t, 0.065, OptType.CALL)
+    put_mid = black76_price(BASIS_FORWARD, strike, BASIS_VOL, t, 0.065, OptType.PUT)
+    call_iv = implied_vol(call_mid, model_fwd, strike, t, 0.065, OptType.CALL)
+    put_iv = implied_vol(put_mid, model_fwd, strike, t, 0.065, OptType.PUT)
+    assert call_iv is not None and put_iv is not None
+    assert call_iv - put_iv > 0.01, (
+        "inverting against the model forward should split call from put by more than "
+        f"a volatility point; got {call_iv:.4f} and {put_iv:.4f}"
+    )
+
+
+def test_a_one_sided_book_falls_back_to_the_model_forward(calendar):
+    """Parity needs both legs. With calls only there is no forward to read off
+    the book, and the honest answer is the model forward rather than no IV at
+    all - a chain of calls is still worth inverting."""
+    now = ist(9, 20)
+    expiry = TEST_DAY + timedelta(days=2)
+    registry, ticks = _basis_chain(calendar, now, expiry)
+    calls_only = [
+        t_
+        for t_ in ticks
+        if registry.get(t_.instrument_id).opt_type is OptionType.CE  # type: ignore[union-attr]
+    ]
+    builder = ChainBuilder(
+        ChainSpec(underlying_id=UNDERLYING, n_expiries=1, strikes_per_side=8), registry, calendar
+    )
+    builder.on_tick(Tick(ts=now, instrument_id=UNDERLYING, ltp=BASIS_SPOT))
+    for tick in calls_only:
+        builder.on_tick(tick)
+    snap = builder.snapshot(now)
+    assert snap is not None
+    assert [q for q in snap.quotes if q.iv is not None], "calls alone must still invert"

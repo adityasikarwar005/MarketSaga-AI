@@ -54,6 +54,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -809,6 +810,7 @@ class AngelOneFeed(MarketFeed):
         self._mode = mode
         self._socket_factory = socket_factory
         self._queue: Queue[Tick] = Queue(maxsize=queue_maxsize)
+        self._thread: threading.Thread | None = None
         # Keyed by exchange segment. The spot and its options do not live on
         # the same one - NIFTY is NSE_CM and its contracts are NSE_FO - and a
         # chain snapshot must carry both from one stream, because a spot
@@ -933,18 +935,55 @@ class AngelOneFeed(MarketFeed):
                 )
                 n += 1
 
-    def connect(self) -> None:
+    def connect(self, *, timeout_seconds: float = 30.0) -> None:
+        """Open the socket on a background thread and wait until it is subscribed.
+
+        **The vendor's `connect()` never returns.** `SmartWebSocketV2.connect`
+        calls `wsapp.run_forever()`, so calling it on this thread parks the
+        caller inside the websocket loop for the life of the process. That is
+        exactly what happened on the first live session: the socket opened, the
+        log said "Websocket connected", and `stream()` never reached its yield
+        loop, so the queue filled to `maxsize` and every tick after that was
+        counted as dropped. Nothing raised, nothing was written, and the
+        symptom - a connected feed producing no data - is indistinguishable from
+        a closed market. Twenty minutes of an option chain that cannot be
+        recorded again went past before anyone looked at the ordering of two log
+        lines.
+
+        Returning before the subscription is acknowledged would only move the
+        problem: the caller would start draining an empty queue and read the
+        silence as a quiet market. So the open is waited for, and a timeout is
+        an error rather than an empty stream.
+        """
         if self._socket is not None:
             return
         if not self._subscribed:
             raise RuntimeError("subscribe() before connect()")
         sock = self._build_socket()
+        opened = threading.Event()
+
+        def _on_open(_ws: Any) -> None:
+            self._push_subscription(self._subscribed)
+            opened.set()
+
         sock.on_data = self._on_data
-        sock.on_open = lambda _ws: self._push_subscription(self._subscribed)
+        sock.on_open = _on_open
         sock.on_error = lambda _ws, err: log.warning("socket error", fields={"error": str(err)})
         sock.on_close = lambda _ws: log.info("socket closed")
         self._socket = sock
-        sock.connect()
+        self._thread = threading.Thread(target=sock.connect, name="angel-ws", daemon=True)
+        self._thread.start()
+        if not opened.wait(timeout_seconds):
+            self._socket = None
+            raise RuntimeError(
+                f"the Angel websocket did not open within {timeout_seconds:g}s. "
+                "Nothing was subscribed, so the stream would have been silent rather "
+                "than empty - which reads as a closed market and is not one."
+            )
+        log.info(
+            "angel websocket subscribed",
+            fields={"tokens": sum(len(v) for v in self._subscribed.values())},
+        )
 
     def stream(self, *, poll_seconds: float = 0.5) -> Iterator[Tick]:
         if not self._subscribed:

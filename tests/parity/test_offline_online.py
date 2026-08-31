@@ -40,7 +40,16 @@ from tests.conftest import TEST_DAY, ist
 
 UNDERLYING = 1
 SPOT = 24_800.0
-INSTRUMENTS = [SyntheticInstrument(instrument_id=UNDERLYING, start_price=SPOT, annual_vol=0.14)]
+# Group D reads these through the ordinary candle accessor - cross-asset series
+# share the Candle schema and sit in the reserved 1000+ range - so parity for
+# them is parity for everything else, provided the fixture actually records them.
+USDINR_ID = 1006
+ASIA_IDX_ID = 1008
+INSTRUMENTS = [
+    SyntheticInstrument(instrument_id=UNDERLYING, start_price=SPOT, annual_vol=0.14),
+    SyntheticInstrument(instrument_id=USDINR_ID, start_price=88.20, annual_vol=0.05),
+    SyntheticInstrument(instrument_id=ASIA_IDX_ID, start_price=3_180.0, annual_vol=0.12),
+]
 
 
 @pytest.fixture(scope="module")
@@ -62,14 +71,21 @@ def recorded(tmp_path_factory, calendar_mod):
     raw = tmp_path_factory.mktemp("parity_src") / "raw"
     clock = SimClock(ist(9, 15))
     feed = SyntheticFeed(INSTRUMENTS, cal, clock, seed=23)
-    feed.subscribe([UNDERLYING])
+    feed.subscribe([UNDERLYING, USDINR_ID, ASIA_IDX_ID])
 
+    # Two expiries, not one. `iv_term_slope` is the difference between them and
+    # a single-expiry fixture would leave it None at every instant - which the
+    # parity test would happily pass, because None equals None on both sides.
+    # Nine strikes a side clears the eight `gamma_concentration_shape` needs
+    # before it will call a handful of contracts a profile.
     registry = build_registry_from_specs(
-        UNDERLYING, [TEST_DAY + timedelta(days=2)], strike_grid(SPOT, step=50.0, n_per_side=6)
+        UNDERLYING,
+        [TEST_DAY + timedelta(days=2), TEST_DAY + timedelta(days=9)],
+        strike_grid(SPOT, step=50.0, n_per_side=12),
     )
     chain_feed = SyntheticChainFeed(registry, cal, underlying_id=UNDERLYING, seed=8)
     chain_builder = ChainBuilder(
-        ChainSpec(underlying_id=UNDERLYING, n_expiries=1, strikes_per_side=4), registry, cal
+        ChainSpec(underlying_id=UNDERLYING, n_expiries=2, strikes_per_side=9), registry, cal
     )
     builder = CandleBuilder(cal)
     rec = Recorder(clock, cal, root=raw, fsync_every=10_000)
@@ -81,6 +97,11 @@ def recorded(tmp_path_factory, calendar_mod):
         rec.write_tick(tick)
         for candle in builder.on_tick(tick):
             rec.write("candles", candle, key=candle.instrument_id)
+        # Only the underlying prices the chain. A USD/INR tick carries an `ltp`
+        # of about 88, and feeding it to `quotes_for` would build a strike
+        # ladder around 88 rupees without complaining about it.
+        if tick.instrument_id != UNDERLYING:
+            continue
         chain_builder.on_tick(tick)
         for opt in chain_feed.quotes_for(tick.ltp, tick.ts):
             chain_builder.on_tick(opt)
@@ -167,6 +188,27 @@ def test_features_actually_produce_values(parity_run):
     late = [v for as_of, v in sorted(offline_vectors.items())][-1]
     computed = {k: v for k, v in late.items() if v is not None}
     assert len(computed) >= 18, f"only {len(computed)} features produced a value"
+
+
+def test_every_registered_feature_produces_a_value_somewhere(parity_run):
+    """None on both sides is parity, and it is worthless.
+
+    `test_parity_covers_every_registered_feature` proves each feature was
+    *compared*; it does not prove either side ever computed anything. A feature
+    whose chain lookup is broken, or whose expiry filter excludes everything, is
+    None offline and None online and sails through every assertion above. The
+    whole of group C was added against a fixture that had one expiry, where
+    `iv_term_slope` was structurally None at every instant - exactly this hole.
+    """
+    offline_vectors, _online, _os, _on, _c, _ch = parity_run
+    ever: set[str] = set()
+    for values in offline_vectors.values():
+        ever.update(k for k, v in values.items() if v is not None)
+    missing = sorted(set(REGISTRY.names()) - ever)
+    assert not missing, (
+        "these features were never computed at any instant of the replay - they are "
+        f"None on both sides, so parity is meaningless for them: {missing}"
+    )
 
 
 def test_comparison_detects_a_real_difference():

@@ -15,8 +15,10 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
+import threading
 from datetime import timedelta
 from pathlib import Path
+from time import sleep
 from types import FrameType
 
 from libs.ms_core import config as cfgmod
@@ -33,12 +35,27 @@ from libs.ms_data.chain import (
     build_registry_from_specs,
     check_chain,
 )
-from libs.ms_data.feed import FeedHealth, MarketFeed, SyntheticFeed, SyntheticInstrument
+from libs.ms_data.feed import (
+    FeedHealth,
+    FeedState,
+    MarketFeed,
+    SyntheticFeed,
+    SyntheticInstrument,
+)
 from libs.ms_data.holidays import HolidayStore, describe_day, next_holiday
 from libs.ms_data.recorder import DATA_ROOT, Recorder
 from libs.ms_data.synthetic_chain import SyntheticChainFeed, strike_grid, weekly_expiries
 
 log = get_logger("ingest_market")
+
+# The strike ladder in strikes, which is the unit its failure is actually
+# measured in. A first attempt expressed the tolerance as a percentage of the
+# index and set it at 5%; the 625-point miss that motivated the check is 2.58%
+# of NIFTY, so the guard sailed past the one case it was written for. The
+# condition below is derived from the geometry instead of picked.
+STRIKE_STEP = 50.0
+REGISTRY_STRIKES_PER_SIDE = 25
+MAX_CLOSE_STALENESS_DAYS = 5
 _stop = False
 
 
@@ -154,6 +171,50 @@ def build_angel_feed(clock: Clock, *, index_token: int, option_tokens: list[int]
     return feed
 
 
+def _start_feed_watchdog(feed: MarketFeed, health: FeedHealth, *, every: float = 15.0):
+    """Evaluate feed health on a timer, not on tick arrival.
+
+    `health.evaluate()` was called from inside the ingest loop, every 5,000
+    ticks. That is the one place it cannot do its job: the condition it exists
+    to detect is *no ticks arriving*, and with none arriving the counter never
+    advances and the check never runs.
+
+    It happened on the first live session. The Angel socket dropped at 10:02,
+    the vendor library retried until 10:08 and gave up, and the process then sat
+    in `stream()`'s poll loop drawing no CPU for twenty-four minutes while the
+    market traded. Nothing raised. The staleness halt was configured, correct,
+    and unreachable.
+
+    The watchdog closes the feed rather than setting `_stop`, and the difference
+    matters: `_stop` is only tested inside the `for` loop body, which a silent
+    feed never enters. `feed.close()` ends the generator itself, so the `finally`
+    block runs and the session's buffers reach the disk.
+    """
+
+    def loop() -> None:
+        while not _stop:
+            sleep(every)
+            if health.evaluate() is FeedState.HALTED:
+                log.error(
+                    "feed silent past the halt threshold - closing the recording",
+                    fields={
+                        "silence_seconds": round(health.silence_seconds() or 0.0, 1),
+                        "halt_after": health.staleness_halt_seconds,
+                    },
+                )
+                print(
+                    f"\n  HALTED: no market data for "
+                    f"{round(health.silence_seconds() or 0.0):.0f}s while the session is "
+                    "open. The recording has been closed cleanly; restart it."
+                )
+                feed.close()
+                return
+
+    thread = threading.Thread(target=loop, name="feed-watchdog", daemon=True)
+    thread.start()
+    return thread
+
+
 def run(args: argparse.Namespace) -> int:
     configure()
     cfg = cfgmod.load(warn=True)
@@ -203,6 +264,12 @@ def run(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGTERM, _handle_signal)
 
     _announce_calendar(store, clock)
+
+    # Synthetic runs drive the clock from their own ticks, so silence there is
+    # the replay ending rather than a feed failing, and a watchdog would only
+    # ever fire spuriously.
+    if args.source != "synthetic":
+        _start_feed_watchdog(feed, health)
 
     log.info(
         "ingest starting",
@@ -311,6 +378,71 @@ def _refuse_angel_without_chain() -> int:
     return 2
 
 
+def _ladder_centre(args, today, *, store=None) -> float | None:
+    """Where to centre the strike ladder, and why it is not a constant.
+
+    This defaulted to 24,800 for a while. NIFTY closed at 24,175.65 on
+    2026-08-28, so a session started without the flag would have built its
+    ladder 625 points - twelve strikes - off centre, and half of it would have
+    been so far out of the money that nothing usable came back. Nothing would
+    have raised: the recorder would have run all day and written a full file of
+    contracts nobody can price. That is a magic number doing exactly the damage
+    R5 exists to prevent, in the one place where the data cannot be recaptured.
+
+    So the default is the last close this repository actually holds, and the
+    three ways it can go wrong are each refused rather than guessed at:
+    no daily history, history too stale to centre on, and an explicit override
+    that disagrees with the close by more than a ladder's width.
+    """
+    from libs.ms_data.daily import DailyStore
+
+    bars = (store or DailyStore()).load(args.chain_name)
+    last = bars[-1] if bars else None
+
+    if args.chain_spot is not None:
+        if last is not None:
+            drift = abs(args.chain_spot - last.c) / STRIKE_STEP
+            if drift >= REGISTRY_STRIKES_PER_SIDE:
+                print(
+                    f"  refusing: --chain-spot {args.chain_spot:,.0f} is {drift:.0f} strikes "
+                    f"from the last close ({last.c:,.2f} on {last.day}), so the money is "
+                    f"outside a grid that reaches +/-{REGISTRY_STRIKES_PER_SIDE}. The "
+                    "recorder would run all day and write a file of unpriceable wings."
+                )
+                return None
+            clipped = drift + args.strikes_per_side - REGISTRY_STRIKES_PER_SIDE
+            if clipped > 0:
+                print(
+                    f"  WARNING: --chain-spot {args.chain_spot:,.0f} is {drift:.0f} strikes "
+                    f"from the last close ({last.c:,.2f}). The ladder still covers the money "
+                    f"but is clipped: roughly {clipped:.0f} of your {args.strikes_per_side} "
+                    "strikes on one side fall outside the grid and will not be captured."
+                )
+        print(f"  chain: ladder centred on --chain-spot {args.chain_spot:,.2f}")
+        return float(args.chain_spot)
+
+    if last is None:
+        print(
+            f"  refusing: no daily history for {args.chain_name}, so there is nothing to "
+            "centre the strike ladder on. Run `python jobs/gap_backfill.py --fetch` first, "
+            "or pass --chain-spot explicitly."
+        )
+        return None
+
+    staleness = (today - last.day).days
+    if staleness > MAX_CLOSE_STALENESS_DAYS:
+        print(
+            f"  refusing: the newest {args.chain_name} close is {last.day}, {staleness} days "
+            f"before {today}. Centring on it is no better than the constant this replaced. "
+            "Refresh it with `python jobs/gap_backfill.py --fetch`, or pass --chain-spot "
+            "explicitly."
+        )
+        return None
+
+    print(f"  chain: ladder centred on {args.chain_name} close {last.c:,.2f} ({last.day})")
+    return float(last.c)
+
+
 def _build_chain(args, calendar, clock):
     """Wire up the chain snapshotter (M14).
 
@@ -321,10 +453,12 @@ def _build_chain(args, calendar, clock):
     if not args.chain:
         return None, None
 
-    spot_guess = float(args.chain_spot)
     today = calendar.local(clock.now()).date()
+    spot_guess = _ladder_centre(args, today)
+    if spot_guess is None:
+        return None, None
     expiries = weekly_expiries(calendar, today, count=2)
-    strikes = strike_grid(spot_guess, step=50.0, n_per_side=25)
+    strikes = strike_grid(spot_guess, step=STRIKE_STEP, n_per_side=REGISTRY_STRIKES_PER_SIDE)
     registry = build_registry_from_specs(args.chain_underlying, expiries, strikes)
     spec = ChainSpec(
         underlying_id=args.chain_underlying,
@@ -381,7 +515,12 @@ def main() -> int:
     p.add_argument("--root", default=str(DATA_ROOT))
     p.add_argument("--chain", action="store_true", help="also capture the option chain")
     p.add_argument("--chain-underlying", type=int, default=1)
-    p.add_argument("--chain-spot", type=float, default=24_800.0, help="strike ladder centre")
+    p.add_argument(
+        "--chain-spot",
+        type=float,
+        default=None,
+        help="strike ladder centre; default is the last daily close, not a constant",
+    )
     p.add_argument("--chain-seconds", type=float, default=5.0, help="snapshot cadence")
     p.add_argument("--strikes-per-side", type=int, default=15)
     p.add_argument("--chain-name", default="NIFTY", help="angel only: underlying name")
