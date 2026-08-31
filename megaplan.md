@@ -569,6 +569,25 @@ python jobs/verify_recording.py --date $(date +%F)
 ```
 **Done:** 5 consecutive complete sessions on disk. **This is Gate G0.**
 
+**How to start it, and why the obvious way did not work.** The live command is
+
+```bash
+python tasks.py record angel --chain
+```
+
+and it must go through `tasks.py`, which is the only thing in the repository
+that loads `.env`. `services.ingest_market` reads the broker credentials
+straight out of `os.environ`, so `python -m services.ingest_market --source
+angel --chain` - the form written down in a previous handoff - fails before it
+reaches the network, reporting credentials missing that are sitting in the file.
+`tasks.py record` had two faults of its own until 2026-08-31: it did not call
+`_load_dotenv`, and it dropped every argument after the source, so `--chain`
+could not be supplied at all. Since the recorder refuses `--source angel`
+without `--chain`, the second fault fired first and hid the first.
+
+`--chain-spot` is no longer needed: the ladder centres on the last close in
+`DailyStore` (see M14).
+
 ---
 
 #### M13 · Candle builder
@@ -607,6 +626,15 @@ python jobs/verify_chain.py --date <day>
 # asserts: >= 95% expected strikes, spot attached, monotone timestamps, no duplicate (ts,strike,type)
 ```
 **Traps:** the spot price must be captured *with* the chain, not joined later. Joining introduces a lag you cannot undo.
+
+**The ladder centre was a constant, and that is fixed.** `--chain-spot`
+defaulted to 24,800 while NIFTY closed at 24,175.65 — twelve strikes off, with
+no error and a full-looking file at the end of the day. It now defaults to the
+last close in `DailyStore`, refuses when there is no history or the close is
+stale, and warns when an explicit override clips the ladder. The first guard
+written for it expressed the tolerance in percent and let the motivating case
+through; see `docs/model_audit.md`, addendum 2026-08-31, for why the unit had to
+be strikes.
 
 **A historical source, until a live one exists.** `libs/ms_data/bhavcopy.py`
 loads NSE's own F&O bhavcopy: every listed contract's strike, expiry, close,
@@ -1234,11 +1262,11 @@ python jobs/leakage_lint.py --strict             # exit 0
 #### M44 · Feature groups A–F
 Implement per blueprint Ch.8 catalogue. Build in this order:
 
-- [ ] **Group A** price/trend (+ time-of-day z-scores — do not skip these)
-- [ ] **Group F** calendar/session/regime (cheap, high value)
-- [ ] **Group C** options-derived (the differentiated group: skew, term structure, GEX, implied move, VRP)
-- [ ] **Group E** event features (severity, novelty, surprise, prior posterior, seconds-since-event)
-- [ ] **Group D** cross-asset
+- [x] **Group A** price/trend (+ time-of-day z-scores — do not skip these) — 12 features
+- [x] **Group F** calendar/session/regime (cheap, high value) — 7 features
+- [x] **Group C** options-derived (the differentiated group: skew, term structure, GEX, implied move, VRP) — 10 features
+- [ ] **Group E** event features (severity, novelty, surprise, prior posterior, seconds-since-event) — blocked behind L2, which is 3/10 and gated on the news-source decision
+- [◐] **Group D** cross-asset — 4 features, intraday overlap only (USD/INR, Asian composite). The overnight channel is deliberately out: it is a session-scoped quantity, already built as `overnight_moves` for M35, and a rolling window is the wrong shape for it
 - [ ] **Group B** microstructure — **only if the feed provides depth**; train a with/without variant
 
 **Verify**
@@ -1247,6 +1275,38 @@ pytest tests/parity/test_offline_online.py       # all groups pass parity
 python jobs/feature_report.py --null-rates --psi # null rate < 1%/feature/day
 ```
 **Traps:** never train on a feature you will not have live at 09:16 on a Tuesday. Feed capability determines the feature set, not the other way round.
+
+**Group C, and what it is waiting for.** Five of its ten features need a book —
+a bid and an ask at a strike — so they are None across the whole bhavcopy
+archive. That is not a defect; it is M70's finding restated as a set of Nones a
+model can see, and only a recorded intraday chain can change it. The group
+computes end to end at a 0.0% null rate over 341 instants on the one recorded
+chain day (2026-08-26), **and that day is synthetic** — the instrument ids are
+sequential, the open interest is symmetric between calls and puts to within
+0.3%, and ATM implied vol sits in a 0.7% band all session. No real intraday
+chain has ever been recorded. What the 0.0% proves is that the plumbing carries
+a chain into every option feature; it proves nothing about a real one.
+
+`gamma_concentration_shape` is **not** M63's statistic and must not be reported
+as one. M63 measured the raw cycle-adjusted sum and lost (Spearman +0.117,
+permutation p = 0.189). This is its shape component, offered as a model input,
+and it ships alongside `days_to_expiry` so the −0.83 confound M63 identified is
+visible to whatever consumes it.
+
+**Group D needed no new plumbing, which is worth recording.** Cross-asset series
+share the `Candle` schema and sit in the reserved 1000+ instrument range, so
+`ctx.candles(instrument_id=...)` already reaches them under the same right-open
+window as everything else — the design note in `config/crossasset.yaml` paid off
+exactly as written. What it did need was a different completeness rule: Group A
+demands one bar per minute, which a foreign exchange cannot supply, and
+accepting any few bars instead would compute a four-minute move and label it
+`ret_30m`. The gate is on the span the bars cover, not on how many there are.
+
+`jobs/feature_report.py` did not exist while M44 was in progress, so half the
+module's Verify block had never been run. It separates *absent input* from
+*silent failure*: a chainless day marks the option features `no input` and
+leaves them out of the gate, because a report that fails on a condition nobody
+can fix is one people learn to skip.
 
 ---
 
@@ -1740,6 +1800,41 @@ entirely manufactured skew between call- and put-implied vols that a model will
 happily learn. `synthetic_forward` recovers it from put-call parity at the
 nearest-the-money strike, and *says so in `method`* when it had to fall back —
 a caller that cannot tell which forward it got will not notice the skew.
+
+**It can now read a live book, and the first one says the archive was the
+problem.** Until 2026-08-31 `load_chain` went to `BhavcopyStore` and nowhere
+else, so the module whose entire finding was *"only a book-carrying intraday
+snapshot can settle this"* was structurally unable to open one.
+`--source recorded` reads a snapshot straight off the recorder's partitions, on
+`PriceBasis.MID`, and both paths now measure their input convexity through the
+same `convexity_of`, so the two are comparable:
+
+| input | negative butterflies, before any model |
+|---|---|
+| daily settlement marks (bhavcopy, 2026-08-26) | **36.9%** |
+| live recorded book (2026-08-31, 10:01:58 IST) | **9.5%** (11 of 116) |
+
+Nine and a half percent is not zero, and where it sits matters more than the
+number: the violating triples sit at a median 2.59% from the money on a median
+widest-leg spread of 1.51%, against 1.36% and 0.46% for the clean ones. Twice as
+far out, on spreads three times as wide — that is the mid being a poor estimate
+of fair value in an illiquid wing, not the market quoting an arbitrage, and it
+is what the fitter's own spread and delta filters exist to drop. The fit on the
+one-week expiry kept 57 of 62 quotes at **0.12 vol points** RMSE.
+
+**This is one instant, not a session, and not a result yet.** No claim is made
+here about whether the surface is stable across a morning or across days. What
+has been established is narrower and was the open question: the archive's marks
+and a live book are not the same kind of data, and the difference is measurable
+before any model touches either.
+
+**And the manufactured skew this module warned about was live in M14.** The
+paragraph above about `S·e^(rT)` producing *"a stable, entirely manufactured
+skew between call- and put-implied vols that a model will happily learn"* was
+written here, and `ChainBuilder._with_iv` was doing exactly that — every call IV
+above its own put by 1.7 vol points at the money and 10.8 in the wings. The
+diagnosis was in the repository before the disease shipped. See
+`docs/model_audit.md`, 2026-08-31.
 
 **No-arbitrage is enforced twice, and that is not redundant.** A penalty inside
 the objective steers the optimiser; whenever fit error outweighs it, the result
@@ -2552,7 +2647,7 @@ modules, **ten entries below have ever consumed real market data**:
 | M15 | cross-asset series, real daily bars |
 | M15b | daily bar loader, ten years of real NIFTY bars |
 | M35 | overnight gap forecaster - measured on real data, and **lost** by 2.4% to a one-variable baseline |
-| M70 | IV surface fitter - run on a real NIFTY chain, and the finding was that daily marks **cannot** support the fit. Consumed real data; not validated on it. |
+| M70 | IV surface fitter - run on real daily marks (cannot support the fit) and, from 2026-08-31, on a real **live book**: 9.5% input butterfly violations against the archive's 36.9%, concentrated in wide-spread wings. Consumed real data; not validated on it. |
 | M55 | volatility model - measured on ten years of real NIFTY bars and **does not beat HAR-RV** (+0.0% Parkinson, -0.1% Garman-Klass). Trial 22. |
 | M54 | quantile heads - **does not beat their own Gaussian fallback** on pinball (-2.2% at 1d, -1.3% at 5d), and both under-cover: a 90% band holds 83-85%. Trial 23. |
 | M53 | direction model - **does not beat the rules baseline**; log-loss CI [-0.0007, +0.0090] straddles zero, and its own discrimination gate refused in 4 folds of 4. Trial 24. |

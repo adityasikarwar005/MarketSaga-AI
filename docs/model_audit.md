@@ -2441,3 +2441,238 @@ tuning knob" in a docstring is worth nothing, so
 `concentration_is_robust_to_sigma` measures it: the rank ordering of days must
 survive a change of bandwidth, and the test requires that correlation above
 0.95. If the ordering moved, the docstring would be the thing that was wrong.
+
+
+---
+
+# Addendum — M44 group C, and two guards that did not guard, 2026-08-31
+
+The feature layer is not `ms_models`, but both defects below are the class this
+file exists for: a working pipeline, a plausible number, and nothing raised.
+
+## The strike ladder was centred on a constant
+
+`services/ingest_market` defaulted `--chain-spot` to **24,800**, an argparse
+default with no source. NIFTY closed at **24,175.65** on 2026-08-28. A session
+started without the flag would have built its grid 625 points — twelve strikes —
+off centre.
+
+**Why it was invisible.** Nothing fails. The recorder connects, the subscription
+succeeds, snapshots are written at the configured cadence, and the file is the
+size you expect. What you have the next morning is a ladder clipped at the
+bottom: the money is still covered, because the registry reaches ±25 strikes, but
+roughly two of the fifteen strikes below the money fall outside the grid and were
+never captured. And this is the one place in the system where the data cannot be
+re-fetched — Monday's book does not exist on Tuesday.
+
+**The fix.** The default is now the last close held in `DailyStore`, which is
+real data (2,466 NIFTY sessions). Three failure modes are refused rather than
+guessed at: no daily history, a close too stale to centre on, and an explicit
+override that puts the money outside the grid.
+
+**The first version of the guard was wrong, which is the more useful half of
+this entry.** It expressed the tolerance as a percentage of the index and set it
+at 5%. The 625-point miss that motivated the whole check is **2.58%** of NIFTY,
+so the guard passed the single case it had been written for, and it passed it
+silently. Percent was the wrong unit. The failure is measured in strikes, and
+the condition is now derived from the geometry rather than picked:
+
+    clipped = drift_in_strikes + strikes_per_side − registry_strikes_per_side
+
+Warn when that is positive, refuse when the drift alone exceeds the registry
+half-width. A tolerance chosen to feel about right is the same defect as a
+bandwidth chosen to make a result appear.
+
+It also corrected an overstatement in the handoff that prompted the work: 24,800
+would not have produced "no usable data". It would have cost about two strikes on
+one side. Saying so is worth more than the dramatic version.
+
+## PSI reported perfect stability for features that never moved
+
+`jobs/feature_report.py` computes a population stability index over quantile bins
+taken from the reference period. The constant-reference guard read
+`if not edges: return None`.
+
+**Why it was invisible.** A constant series still produces one quantile edge, so
+`edges` is non-empty and the guard never fires. One edge makes two bins, both
+sides land in the same one, and the index comes out **0.000** — which reads as
+"perfectly stable" next to features that genuinely were. A degenerate input
+produced a confident, well-formatted number in the same column as real ones.
+
+**The fix.** Test distinct values in the reference, not distinct edges. Caught by
+`test_a_constant_reference_has_no_distribution_to_be_stable_against`, which was
+written before the guard was checked rather than after it was trusted.
+
+## The "no input" excuse was hard-coded to the chain
+
+`feature_report.py` separates *absent input* from *silent failure* so the gate
+does not fail on conditions nobody can fix. The check read
+`REGISTRY.get(name).group == "C" and not self.had_chain`.
+
+**Why it was invisible.** It was correct on the day it was written, because
+group C was the only group with an external input. Adding group D made all four
+of its features report FAIL at 100% on a day with no cross-asset collector
+running - which is precisely the outcome the function's own docstring says makes
+a gate get ignored, produced by the function written to prevent it. A rule
+keyed to one hard-coded group is a rule that expires silently the next time a
+group is added.
+
+**The fix.** `GROUP_INPUTS` maps a group to the recorded stream it needs, and
+`has_no_input` is keyed off that. A test asserts every excusable group appears
+in the map, so the next group added either declares its input or is gated -
+there is no third option where it is quietly excused and nobody notices.
+
+## What group C is, and what it is not
+
+Ten features. Five need a bid and an ask, so they are None across the entire
+bhavcopy archive — M70's finding restated as a set of Nones a model can see.
+
+`gamma_concentration_shape` is **not** M63's statistic. M63 measured the raw
+cycle-adjusted sum and lost: Spearman +0.117 against the HAR residual,
+permutation p = 0.189 on 128 sessions. What ships is its shape component,
+normalised by total open interest and multiplied by spot so the index level
+cancels — pinned by a test at two index levels three times apart, because the
+1/S in Black-Scholes gamma would otherwise drift the feature across a decade of
+history and look like a volatility regime. It is a model input, not a finding,
+and it ships beside `days_to_expiry` so M63's −0.83 confound stays visible.
+
+**No real intraday chain has ever been recorded.** The group computes at a 0.0%
+null rate over 341 instants on the one chain day on disk (2026-08-26) and that
+day is synthetic: sequential instrument ids, call and put open interest
+symmetric to within 0.3%, ATM implied vol inside a 0.7% band all session. The
+0.0% proves the plumbing carries a chain into every option feature. It says
+nothing about a real one.
+
+
+---
+
+# Addendum — the first live session, 2026-08-31
+
+Four defects, found by pointing the system at a real feed for the first time.
+Every one of them was invisible on synthetic data, and three were invisible in
+the sense this file catalogues: the pipeline ran, the numbers looked like
+numbers, and nothing raised.
+
+## 1. The websocket blocked the stream, and silence looked like a closed market
+
+`SmartWebSocketV2.connect()` calls `wsapp.run_forever()`. `AngelOneFeed.connect`
+called it on the calling thread, so `stream()` parked inside the websocket loop
+and never reached its own yield. The queue filled to `maxsize` and every tick
+after that was counted as dropped.
+
+**Why it was invisible.** The log read: session established, tokens 375,
+websocket connected. Then nothing. That is exactly what a feed connected to a
+closed market looks like, and the ordering of two log lines is the only thing
+that distinguishes them. Twenty-two minutes of an option chain that cannot be
+recorded again went past before anyone read them in order.
+
+**The fix.** The socket runs on a daemon thread and `connect()` waits on an
+`Event` the `on_open` callback sets, so it returns subscribed or raises. A
+timeout is an error rather than an empty stream: returning early would only move
+the failure, leaving the caller draining an empty queue and reading the silence
+as a quiet market.
+
+## 2. Implied volatility was inverted against a forward the market was not using
+
+The finding of the day, and the one with the longest downstream reach.
+
+`ChainBuilder._with_iv` priced every quote against `forward_from_spot(spot, r, t)`.
+The book was quoting a different forward, and said so at every strike.
+
+| | |
+|---|---|
+| spot | 24,023.20 |
+| model forward, r = 6.5% | 24,029.40 |
+| forward from put-call parity | **24,049.55** |
+| dispersion of the parity estimate across 12 near-the-money strikes | **0.35** |
+
+Parity gives `F = K + (C − P)·e^{rt}` at every strike. Twenty-one strikes agreed
+to within a third of a point, so the book was orderly and the forward was not in
+doubt. The model forward was twenty points below it.
+
+**What twenty points of moneyness did.** Solving a call against a forward that
+is too low needs a higher volatility to reach the observed price; a put needs a
+lower one. So every call came out above its own put at the same strike:
+
+| strike | call IV | put IV | gap |
+|---|---|---|---|
+| 24,000 (ATM) | 9.96% | 8.14% | 1.82 |
+| 23,800 | 12.49% | 9.29% | 3.20 |
+| 23,400 | 22.14% | 14.39% | 7.75 |
+| 23,250 | 27.38% | 16.54% | 10.84 |
+
+`atm_iv` averages the two and lands between them, on a number neither leg
+supports. `iv_skew_25d` reported 0.038-0.041 - and it is built from a downside
+band against an upside band, which is precisely the axis this artefact runs
+along, so most of what it was measuring was the error rather than the market's
+fear. And seventeen of 124 quotes carried no IV at all: deep in-the-money puts
+priced against a forward twenty points low sit below intrinsic, where there is
+no solution. Both symptoms, one cause.
+
+**The fix.** `forward_from_parity` reads the forward off the book - median over
+the strikes that have both legs, gated on a dispersion of half a strike step.
+The gate is not a taste: below half a step the estimate cannot separate adjacent
+strikes anyway, and above it the quotes are disagreeing by more than the grid
+they sit on, which is a disorderly book rather than a forward. The model forward
+remains the fallback for one-sided books.
+
+`forward_from_spot` had said *"Prefer a traded future when there is one"* in its
+first line since the day it was written. The option book is a traded forward,
+and a better one than a future for this purpose because it is the exact expiry.
+The advice was there; nothing enforced it.
+
+**The test that did not exist.** A call and a put at one strike and one expiry
+are the same volatility seen twice. That is not a modelling opinion and it costs
+one assertion. `test_a_call_and_its_put_agree_on_volatility` builds a book at a
+forward deliberately offset from `spot·e^{rt}` - the synthetic chain feed prices
+*off* `forward_from_spot`, so a book built by it agrees with the model forward
+by construction and could never have shown this - and
+`test_the_model_forward_is_what_splits_them` reproduces the split, so the
+detector has been watched firing.
+
+**Nothing is lost.** IV is derived, and the recorded book carries bid, ask, LTP
+and open interest. Today's session can be re-inverted against the parity forward
+whenever the file is read.
+
+## 3. Fsync counted rows per file, so the thinnest stream never reached the disk
+
+`Recorder` synced a file every 500 rows. The tick stream was fine - the index
+alone crosses 500 in seconds. Candles fan out across one file per contract:
+375 files holding about five rows each, none of which ever reached the
+threshold. Two hours into the session `data/raw/candles/date=2026-08-31/` was
+375 files of zero bytes while the log reported 1,769 candles written.
+
+Nothing had failed. A row counter cannot see a stream that thin, and a hard kill
+would have lost the lot - recoverable from ticks, which is why this is a defect
+rather than a disaster, but the module's own docstring promises durability.
+Time is the dimension that does not care how writes are distributed, so the
+policy is now "every 500 rows in a file, or every 30 seconds across all of
+them", off the injected clock.
+
+## 4. The live path stamps vendor tokens; the research layer keys off config ids
+
+A live Angel session records `instrument_id` 26000 for the NIFTY index and its
+own token for every contract. `config/instruments.yaml` calls that instrument 1.
+`build_angel_chain` says so in its docstring and it is the right call for a
+recorder - inventing an id would mean translating every tick at the point where
+mistakes are most expensive.
+
+But nothing downstream translates either. `jobs/feature_report.py --instrument 1`
+reads today's partition, finds no candles for instrument 1 and reports the day as
+empty; it is not wrong, it is asking about an instrument that never appears.
+`jobs/live_state.py` resolves the token off the filenames on disk to get around
+it, which works and is not a fix.
+
+This one is **not fixed**. A translation belongs at one seam - most likely the
+instrument master, resolving a vendor token to a config id at load - and putting
+it anywhere else creates a second place where ids can disagree. That is a design
+decision rather than a patch, and it should not be taken at speed during a
+session that cannot be recorded again.
+
+## What the session is worth
+
+Every quote carried a bid and an ask. Twenty-one strikes agreed on the forward to
+a third of a point. This is the book that eight years of bhavcopy cannot supply
+and that M70 established the archive could never settle - and it took one live
+morning to find two defects in the code that reads it, one of which had been
+quietly corrupting the differentiated feature group's headline number.
