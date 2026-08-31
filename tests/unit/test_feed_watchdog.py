@@ -178,3 +178,37 @@ def test_a_run_without_a_chain_still_watches_the_feed(health):
     _start_feed_watchdog(feed, health, clock=health.clock, chain_builder=None, every=0.02)
     health.clock.advance(seconds=HALT_AFTER + 5)
     assert _settle(lambda: feed.closed)
+
+
+def test_a_transient_lull_does_not_kill_the_recording(health):
+    """The bug that churned the supervised session, and the reason the watchdog
+    reads a measurement rather than a state.
+
+    `FeedHealth.state` never comes back from HALTED - `on_message` recovers
+    STALE, CONNECTING and DISCONNECTED and deliberately not that one, because a
+    trading halt should require a decision to lift. Polling `evaluate()` turned
+    the first three-second lull of a session into a permanent kill: run 2 of the
+    supervised recording died after 5.8 minutes reporting `silence_seconds: 0.0`.
+    """
+    feed = FakeFeed()
+    _start_feed_watchdog(feed, health, clock=health.clock, every=0.02)
+
+    health.clock.advance(seconds=HALT_AFTER + 2)  # one lull past the threshold
+    health.evaluate()
+    assert health.state is FeedState.HALTED, "the latch is the behaviour under test"
+
+    health.on_message()  # and the feed comes straight back
+    for _ in range(8):
+        health.clock.advance(seconds=1)
+        health.on_message()
+        time.sleep(0.03)
+    assert not feed.closed, "a recovered feed was killed by a state that never resets"
+
+
+def test_the_latch_is_left_alone(health):
+    """The fix belongs in the watchdog, not in FeedHealth. Un-latching HALTED to
+    suit this loop would quietly change what a halt means everywhere else."""
+    health.clock.advance(seconds=HALT_AFTER + 2)
+    health.evaluate()
+    health.on_message()
+    assert health.state is FeedState.HALTED
