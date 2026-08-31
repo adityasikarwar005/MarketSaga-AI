@@ -171,7 +171,20 @@ def build_angel_feed(clock: Clock, *, index_token: int, option_tokens: list[int]
     return feed
 
 
-def _start_feed_watchdog(feed: MarketFeed, health: FeedHealth, *, every: float = 15.0):
+# How many snapshots the chain may miss before the recording is called dead.
+# Twelve at the default five-second cadence is a minute - derived from the
+# cadence rather than picked, so changing the cadence carries it along.
+MISSED_SNAPSHOTS_BEFORE_HALT = 12
+
+
+def _start_feed_watchdog(
+    feed: MarketFeed,
+    health: FeedHealth,
+    *,
+    clock: Clock,
+    chain_builder: ChainBuilder | None = None,
+    every: float = 15.0,
+):
     """Evaluate feed health on a timer, not on tick arrival.
 
     `health.evaluate()` was called from inside the ingest loop, every 5,000
@@ -189,11 +202,50 @@ def _start_feed_watchdog(feed: MarketFeed, health: FeedHealth, *, every: float =
     matters: `_stop` is only tested inside the `for` loop body, which a silent
     feed never enters. `feed.close()` ends the generator itself, so the `finally`
     block runs and the session's buffers reach the disk.
+
+    **Feed health alone is not enough, and the second stall proved it.** It asks
+    whether *any* message arrived. When the socket dropped at 10:58 the vendor
+    library kept retrying and 1,864 ticks trickled through over the next
+    twenty-one minutes - enough to keep `on_message` fresh past a three-second
+    threshold most of the time, so the halt only fired once the library gave up
+    entirely. The index had stopped, so not one chain snapshot was produced in
+    those twenty-one minutes. A feed can be alive in aggregate and dead in the
+    one instrument the recording is about, and only the chain's own cadence can
+    tell the difference.
     """
+
+    stall_after = (
+        MISSED_SNAPSHOTS_BEFORE_HALT * chain_builder.snapshot_seconds
+        if chain_builder is not None
+        else None
+    )
+
+    def chain_is_stalled() -> float | None:
+        """Seconds since the last snapshot, once that is past the threshold."""
+        if chain_builder is None or stall_after is None:
+            return None
+        last = chain_builder.last_snapshot_at
+        if last is None:
+            return None  # the session has not produced its first snapshot yet
+        behind = (clock.now() - last).total_seconds()
+        return behind if behind > stall_after else None
 
     def loop() -> None:
         while not _stop:
             sleep(every)
+            behind = chain_is_stalled()
+            if behind is not None:
+                log.error(
+                    "no chain snapshot past the threshold - closing the recording",
+                    fields={"behind_seconds": round(behind, 1), "stall_after": stall_after},
+                )
+                print(
+                    f"\n  HALTED: no option chain snapshot for {behind:.0f}s while the "
+                    "session is open, though the feed is still delivering something. "
+                    "The recording has been closed cleanly; restart it."
+                )
+                feed.close()
+                return
             if health.evaluate() is FeedState.HALTED:
                 log.error(
                     "feed silent past the halt threshold - closing the recording",
@@ -269,7 +321,7 @@ def run(args: argparse.Namespace) -> int:
     # the replay ending rather than a feed failing, and a watchdog would only
     # ever fire spuriously.
     if args.source != "synthetic":
-        _start_feed_watchdog(feed, health)
+        _start_feed_watchdog(feed, health, clock=clock, chain_builder=chain_builder)
 
     log.info(
         "ingest starting",
