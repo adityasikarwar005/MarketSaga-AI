@@ -39,6 +39,8 @@ PUBLISHED = (
     "index.html",
     "site.css",
     "desk.html",
+    "chart.html",
+    "chart_data.js",
     "app.css",
     "app.js",
     "data.js",
