@@ -141,37 +141,171 @@ def check_tick_sequence_gaps(ticks: Sequence[Tick]) -> Check:
     return Check("tick_sequence_gaps", verdict, float(missing), 0.0, f"{seen:,} sequenced ticks")
 
 
-def check_candle_count(
-    candles: Sequence[Candle], calendar: SessionCalendar, *, tf: int = 1
-) -> Check:
-    """A continuous session must contain exactly the expected number of candles.
+def instruments_from_chain(
+    snapshots: Sequence[ChainSnapshot],
+) -> tuple[frozenset[int], frozenset[int]]:
+    """``(option_ids, underlying_ids)``, read off the day's own chain snapshots.
 
-    Anything else is a feed problem or a calendar problem, and both need a human
-    before research runs on that day.
+    The gates below need to know an index from a deep out-of-the-money option,
+    and on a live recording they cannot ask `config/instruments.yaml`: an Angel
+    session stamps the vendor's own token, so NIFTY arrives as 26000 and the
+    config's id 1 appears nowhere. Rather than wait for that seam to be closed,
+    this reads the classification out of the data - a chain snapshot names its
+    underlying and lists every contract written on it, which is exactly the
+    dictionary needed and is guaranteed to agree with the recording it came from.
+
+    Empty on a day with no chain, and every caller treats that as "assume
+    continuous", which is the old behaviour.
+    """
+    options: set[int] = set()
+    underlyings: set[int] = set()
+    for snap in snapshots:
+        underlyings.add(snap.underlying_id)
+        for q in snap.quotes:
+            if q.instrument_id is not None:
+                options.add(q.instrument_id)
+    return frozenset(options - underlyings), frozenset(underlyings)
+
+
+def check_candle_count(
+    candles: Sequence[Candle],
+    calendar: SessionCalendar,
+    *,
+    tf: int = 1,
+    continuous_ids: frozenset[int] | None = None,
+) -> Check:
+    """A continuously quoted instrument must contain exactly the expected count.
+
+    **The instrument this applies to is the point.** An index quotes every minute
+    the market is open, so 375 is a fact about it. An option contract does not:
+    on the first live NIFTY session the median contract produced candles in
+    45 minutes of the session and the thinnest in 39, because nobody traded it
+    the rest of the time. Applied to all 375 contracts, this gate took the worst
+    of them and blocked the day - every live day, forever, which is how a gate
+    stops being read.
+
+    So ``continuous_ids`` names the instruments the expectation is about, and
+    everything else is left to the chain gates, which check options with
+    model-free bounds rather than a count.
     """
     if not candles:
         return Check("candle_count", Verdict.FAIL, 0.0, detail="no candles at all")
     expected = calendar.expected_candle_count(tf)
     per_instrument: dict[int, set[datetime]] = {}
     for c in candles:
-        if c.tf == tf:
+        if c.tf == tf and (continuous_ids is None or c.instrument_id in continuous_ids):
             per_instrument.setdefault(c.instrument_id, set()).add(c.ts)
 
-    worst_id, worst_n = None, expected
-    for iid, stamps in per_instrument.items():
-        if len(stamps) < worst_n:
-            worst_id, worst_n = iid, len(stamps)
+    if not per_instrument:
+        return Check(
+            "candle_count",
+            Verdict.SKIP,
+            0.0,
+            float(expected),
+            "no continuously-quoted instrument in this day - nothing this gate is about",
+        )
 
-    if worst_id is None:
-        return Check("candle_count", Verdict.PASS, float(expected), float(expected))
-    verdict = Verdict.PASS if worst_n == expected else Verdict.FAIL
+    worst_id, worst_n = min(per_instrument.items(), key=lambda kv: len(kv[1]))
+    worst_len = len(worst_n)
+    if worst_len < expected:
+        # A part-recorded day is not a corrupt one, and calling it corrupt is how
+        # the distinction stops being made. `session_gaps` reports what is
+        # actually missing and where; this gate only speaks for a whole session.
+        return Check(
+            "candle_count",
+            Verdict.SKIP,
+            float(worst_len),
+            float(expected),
+            f"{len(per_instrument)} continuous instrument(s); worst {worst_id} has "
+            f"{worst_len}/{expected} - a partial session, see session_gaps",
+        )
+    verdict = Verdict.PASS if worst_len == expected else Verdict.FAIL
     return Check(
         "candle_count",
         verdict,
-        float(worst_n),
+        float(worst_len),
         float(expected),
-        f"{len(per_instrument)} instrument(s); worst is {worst_id}",
+        f"{len(per_instrument)} continuous instrument(s); worst is {worst_id}",
     )
+
+
+def check_session_gaps(
+    candles: Sequence[Candle],
+    calendar: SessionCalendar,
+    day: date,
+    *,
+    now: datetime,
+    tf: int = 1,
+    continuous_ids: frozenset[int] | None = None,
+    max_missing_minutes: float = 0.0,
+) -> Check:
+    """Minutes of the session that elapsed and were not recorded.
+
+    This is the gate the first live session needed and did not have. Eighty-six
+    minutes of a 375-minute session went unrecorded that day - a blocked
+    websocket, a silent stall, two dropped sockets - and not one check said so.
+    `candle_count` failed, but about the wrong instrument and for the wrong
+    reason, so the number on the report had nothing to do with what had gone
+    wrong.
+
+    Measured against the part of the session that has actually happened:
+    ``[open, min(now, close)]``. That distinction is the whole design. An
+    interior hole, a late start and a feed that died at noon are all the same
+    thing - minutes that existed and were not captured - and all three have to
+    count. A first attempt measured only the interior, which passed a recording
+    that stopped at noon and never came back, because a truncation leaves no gap
+    between two candles. What it must *not* count is the part of the session
+    that has not happened yet, or every mid-session run reports the afternoon as
+    missing.
+
+    ``now`` is injected. Reading the wall clock here would make the gate's
+    verdict depend on when it was run rather than on what was recorded, and a
+    replayed day would report every minute after the replay as lost.
+
+    The threshold is zero. There is no quantity of unrecorded market data that
+    is acceptable in a stream nobody can replay, and a gate whose threshold can
+    be raised until it passes is the failure this repository exists to prevent.
+    """
+    opened, closed = calendar.session_bounds(day)
+    horizon = min(now, closed)
+    elapsed = (horizon - opened).total_seconds() / 60.0
+    if elapsed <= 0:
+        return Check("session_gaps", Verdict.SKIP, 0.0, detail="the session has not opened")
+
+    per_instrument: dict[int, set[datetime]] = {}
+    for c in candles:
+        in_scope = continuous_ids is None or c.instrument_id in continuous_ids
+        if c.tf == tf and in_scope and opened <= c.ts < horizon:
+            per_instrument.setdefault(c.instrument_id, set()).add(c.ts)
+    if not per_instrument:
+        return Check(
+            "session_gaps",
+            Verdict.FAIL,
+            elapsed,
+            max_missing_minutes,
+            f"nothing recorded in {elapsed:.0f} elapsed minute(s)",
+        )
+
+    expected = int(elapsed // tf)
+    worst_id, worst_missing, detail = None, -1.0, ""
+    for iid, stamps in per_instrument.items():
+        missing = float(expected - len(stamps))
+        if missing > worst_missing:
+            ordered = sorted(stamps)
+            head = (ordered[0] - opened).total_seconds() / 60.0
+            tail = (horizon - ordered[-1]).total_seconds() / 60.0 - tf
+            interior = max(
+                ((b - a).total_seconds() / 60.0 - tf for a, b in pairwise(ordered)), default=0.0
+            )
+            worst_id, worst_missing = iid, missing
+            detail = (
+                f"instrument {iid}: {missing:.0f} of {expected} minute(s) missing "
+                f"(late start {max(head, 0.0):.0f}m, largest hole {interior:.0f}m, "
+                f"tail {max(tail, 0.0):.0f}m)"
+            )
+    _ = worst_id
+    verdict = Verdict.PASS if worst_missing <= max_missing_minutes else Verdict.FAIL
+    return Check("session_gaps", verdict, max(worst_missing, 0.0), max_missing_minutes, detail)
 
 
 def check_synthetic_share(candles: Sequence[Candle], *, max_share: float = 0.30) -> Check:
@@ -199,14 +333,47 @@ def check_candle_consistency(candles: Sequence[Candle]) -> Check:
     return Check("candle_consistency", verdict, float(len(bad)), 0.0, detail)
 
 
-def check_price_jumps(candles: Sequence[Candle], *, max_move: float = 0.10) -> Check:
+def check_price_jumps(
+    candles: Sequence[Candle],
+    *,
+    max_move: float = 0.10,
+    continuous_ids: frozenset[int] | None = None,
+) -> Check:
     """A single-minute move beyond a sane bound is almost always bad data.
 
     A real ten percent minute would be a circuit breaker, which the session
     calendar would already have told us about.
+
+    **That argument is about a level, and an option premium is not one.** A
+    twenty-rupee option going to twenty-six is a six-rupee move on an index that
+    barely twitched; it is the contract's gearing, not corrupt data. On the first
+    live NIFTY session 70 of 374 contracts - 19% - moved more than ten percent in
+    some minute, while the index's worst minute was 0.07%. Applied to the whole
+    chain this gate reported the day as broken and was reporting the definition
+    of an option.
+
+    A delta-bounded version was measured before this was written: |dOption| must
+    not exceed |dUnderlying|, since delta is bounded by one. On real data 6.6% of
+    minute-pairs breach it, because over a minute an option also moves on vega
+    and on its own quote noise, and the ratio explodes whenever the index moves a
+    single tick. It is a real bound and a poor gate.
+
+    So the gate names the instruments it is *for* rather than the ones it is
+    against. An exclusion list was tried first and was quietly incomplete: a
+    snapshot carries only the strikes around the money, so contracts that never
+    entered that window all day never appeared in it, and 243 option contracts
+    went on being measured against an index's bound. A gate whose scope depends
+    on which contracts happened to trade near the money is not a scope.
+
+    Options are left to the chain gates, which check them with model-free bounds
+    - crossed books, put-call parity, implied-vol sanity - that need no threshold
+    at all. Coverage is reported so a PASS cannot hide a gate that checked
+    nothing.
     """
     by_instrument: dict[int, list[Candle]] = {}
     for c in sorted(candles, key=lambda c: c.ts):
+        if continuous_ids is not None and c.instrument_id not in continuous_ids:
+            continue
         by_instrument.setdefault(c.instrument_id, []).append(c)
 
     # Track "did we compare anything" separately from "what was the worst move".
@@ -223,9 +390,25 @@ def check_price_jumps(candles: Sequence[Candle], *, max_move: float = 0.10) -> C
             if move > worst:
                 worst, where = move, f"instrument {iid} at {b.ts.isoformat()}"
     if compared == 0:
-        return Check("price_jumps", Verdict.SKIP, 0.0, detail="fewer than two candles")
+        return Check(
+            "price_jumps",
+            Verdict.SKIP,
+            0.0,
+            detail=(
+                "no continuously-quoted instrument has two candles"
+                if continuous_ids is not None
+                else "fewer than two candles"
+            ),
+        )
     verdict = Verdict.PASS if worst <= max_move else Verdict.FAIL
-    return Check("price_jumps", verdict, worst, max_move, where or f"{compared:,} pairs")
+    covered = f"{len(by_instrument)} instrument(s), {compared:,} pairs"
+    return Check(
+        "price_jumps",
+        verdict,
+        worst,
+        max_move,
+        f"{where}; {covered}" if where else covered,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -435,6 +618,7 @@ def run_market_checks(
     day: date,
     calendar: SessionCalendar,
     *,
+    now: datetime,
     ticks: Iterable[Tick] = (),
     candles: Iterable[Candle] = (),
     chain: Iterable[ChainSnapshot] = (),
@@ -445,11 +629,17 @@ def run_market_checks(
     tick_list, candle_list = list(ticks), list(candles)
     chain_list, news_list = list(chain), list(news)
 
+    # Classified from the day's own chain, not from config: a live session
+    # stamps the vendor's token, so the config ids appear nowhere in this data.
+    _options, underlying_ids = instruments_from_chain(chain_list)
+    continuous = underlying_ids or None
+
     report.add(check_tick_sequence_gaps(tick_list))
-    report.add(check_candle_count(candle_list, calendar))
+    report.add(check_candle_count(candle_list, calendar, continuous_ids=continuous))
+    report.add(check_session_gaps(candle_list, calendar, day, now=now, continuous_ids=continuous))
     report.add(check_candle_consistency(candle_list))
     report.add(check_synthetic_share(candle_list))
-    report.add(check_price_jumps(candle_list))
+    report.add(check_price_jumps(candle_list, continuous_ids=continuous))
     report.add(check_chain_completeness(chain_list))
     report.add(check_iv_sanity(chain_list))
     report.add(check_crossed_books(chain_list))

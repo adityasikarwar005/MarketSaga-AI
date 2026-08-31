@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from libs.ms_core import config as cfgmod
-from libs.ms_core.clock import SessionCalendar
+from libs.ms_core.clock import Clock, RealClock, SessionCalendar
 from libs.ms_core.obs import configure
 from libs.ms_core.schemas import Candle, ChainSnapshot, Msg, RawNewsItem, Tick
 from libs.ms_data.holidays import HolidayStore
@@ -37,10 +37,15 @@ def _load[T: Msg](stream: str, day: date, cls: type[T]) -> list[T]:
     return out
 
 
-def check_day(day: date, calendar: SessionCalendar, *, save: bool = True) -> bool:
+def check_day(
+    day: date, calendar: SessionCalendar, *, clock: Clock | None = None, save: bool = True
+) -> bool:
     report = run_market_checks(
         day,
         calendar,
+        # Injected, so a replayed day is judged against the session that had
+        # elapsed then rather than against whenever the job happens to run.
+        now=(clock or RealClock()).now(),
         ticks=_load("ticks", day, Tick),
         candles=_load("candles", day, Candle),
         chain=_load("chain", day, ChainSnapshot),
