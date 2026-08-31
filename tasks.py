@@ -232,16 +232,24 @@ def angel_check() -> None:
 def dashboard() -> None:
     """M91 - serve the dashboard.
 
-    A plain static server. Two pages: `index.html` is the overview and
-    `desk.html` is the workspace. The workspace reads its session from
-    `data.js` rather than fetching JSON, so it also opens straight from the
-    filesystem - but served is how it will actually run, and a thing only ever
-    opened one way acquires assumptions about that way.
+    Three pages: `index.html` is the overview, `desk.html` is the workspace and
+    `live.html` is what the recorder is holding right now. The first two read
+    their session from `data.js` rather than fetching JSON, so they also open
+    straight from the filesystem - but served is how they will actually run, and
+    a thing only ever opened one way acquires assumptions about that way.
+
+    `live.html` is the exception and cannot be opened off the filesystem: it
+    polls `/api/live`, which reads the recorder's own partitions and computes
+    the feature vector from them. That endpoint is read-only by construction.
+    The recorder holds the only data in this project that cannot be fetched
+    again, and a dashboard must never be the reason a session stops.
     """
     import http.server
+    import json
 
     root = ROOT / "services" / "dashboard"
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8787
+    sys.path.insert(0, str(ROOT))
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         # HTTP/1.1 so the browser may keep connections alive. On a
@@ -251,6 +259,32 @@ def dashboard() -> None:
 
         def __init__(self, *a: object, **kw: object) -> None:
             super().__init__(*a, directory=str(root), **kw)  # type: ignore[arg-type]
+
+        def do_GET(self) -> None:
+            if self.path.split("?")[0] != "/api/live":
+                super().do_GET()
+                return
+            try:
+                from datetime import datetime
+                from zoneinfo import ZoneInfo
+
+                from jobs.live_state import build_state
+
+                day = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+                body = json.dumps(build_state(day), default=str).encode()
+                code = 200
+            except Exception as exc:
+                # A broken endpoint must say so on the page rather than leaving
+                # the last good numbers on screen looking current. A live view
+                # that silently stops updating is worse than one that is blank.
+                body = json.dumps({"error": f"{type(exc).__name__}: {exc}"}).encode()
+                code = 500
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
 
         def log_message(self, fmt: str, *args: object) -> None:
             pass
@@ -469,10 +503,26 @@ def sync_instruments() -> None:
 
 
 def record() -> None:
-    """Start the recorder. The single most important thing in this repository."""
-    src = sys.argv[2] if len(sys.argv) > 2 else "synthetic"
-    args = ["-m", "services.ingest_market", "--source", src]
-    if src == "synthetic":
+    """Start the recorder. The single most important thing in this repository.
+
+        python tasks.py record                        a synthetic session
+        python tasks.py record angel --chain          the live morning
+
+    `_load_dotenv` is not decoration here. `services.ingest_market` reads the
+    broker credentials straight out of `os.environ` and nothing in that package
+    loads `.env`, so the documented live command failed before it reached the
+    network - `AngelCredentials.from_env` says as much in its own error, and
+    this entry point was still not loading the file it points at. Everything
+    after the source is passed through, because `--chain` is the flag the live
+    session cannot run without and there was no way to supply it.
+    """
+    _load_dotenv()
+    rest = sys.argv[2:]
+    src = "synthetic"
+    if rest and not rest[0].startswith("-"):
+        src, rest = rest[0], rest[1:]
+    args = ["-m", "services.ingest_market", "--source", src, *rest]
+    if src == "synthetic" and not rest:
         args += ["--minutes", "375", "--verify", "--metrics"]
     run(_py(), *args, check=False)
 

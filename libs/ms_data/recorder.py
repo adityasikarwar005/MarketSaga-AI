@@ -86,12 +86,15 @@ class Recorder:
         *,
         root: Path = DATA_ROOT,
         fsync_every: int = 500,
+        fsync_seconds: float = 30.0,
         partition_by_instrument: bool = True,
     ) -> None:
         self._clock = clock
         self._calendar = calendar
         self._root = root
         self._fsync_every = fsync_every
+        self._fsync_seconds = fsync_seconds
+        self._last_sync_at = clock.now()
         self._partition_by_instrument = partition_by_instrument
         self._handles: dict[Path, IO[str]] = {}
         self._rows: dict[Path, int] = {}
@@ -153,6 +156,17 @@ class Recorder:
 
         if self._since_sync[path] >= self._fsync_every:
             self._flush(path)
+        elif (self._clock.now() - self._last_sync_at).total_seconds() >= self._fsync_seconds:
+            # A row count alone is not a durability policy when one stream fans
+            # out across hundreds of files. On the first live session the tick
+            # stream was fine - the index alone crossed 500 rows in seconds -
+            # while every one of 375 candle files held about five rows, never
+            # reached the threshold, and sat in a Python buffer. Two hours in,
+            # `data/raw/candles/date=.../` was 375 files of zero bytes while the
+            # log reported 1,769 candles written. Nothing had failed; the
+            # counter simply could not see a stream that thin. Time is the
+            # dimension that does not care how the writes are spread.
+            self.flush()
         METRICS.inc("recorder_rows_total", stream=stream)
         return path
 
@@ -183,6 +197,7 @@ class Recorder:
     def flush(self) -> None:
         for path in list(self._handles):
             self._flush(path)
+        self._last_sync_at = self._clock.now()
 
     # -- manifests ----------------------------------------------------------
     def write_manifests(self) -> list[FileManifest]:
