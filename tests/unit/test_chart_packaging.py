@@ -181,3 +181,192 @@ class TestChainVsSeries:
     @pytest.mark.parametrize("bars", [0, 1, MIN_BARS_FOR_CHART - 1])
     def test_the_threshold_is_applied_the_way_the_builder_applies_it(self, bars: int) -> None:
         assert (bars >= MIN_BARS_FOR_CHART) is False
+
+
+class TestBackoffPolicy:
+    """One wait did not fit both interruptions, and the difference is the run.
+
+    A throttle refills over tens of seconds; a dropped connection usually clears
+    on the next attempt. Retrying a throttle after two seconds spends the run
+    re-earning the block, and waiting twenty for a blip spends four hundred
+    contracts' worth of time on nothing.
+    """
+
+    def _row(self):
+        class Row:
+            token, symbol, strike, exch_seg = 1, "NIFTY24000CE", 24000.0, "NFO"
+
+        return Row()
+
+    def _raiser(self, errors: list[BaseException | None]):
+        seq = list(errors)
+
+        def fetch(*a, **k):
+            exc = seq.pop(0)
+            if exc is not None:
+                raise exc
+            return ([], True)
+
+        return fetch
+
+    def test_the_network_is_not_made_to_wait_the_throttles_wait(self, monkeypatch) -> None:
+        slept: list[float] = []
+        monkeypatch.setattr(
+            option_history, "fetch_series", self._raiser([TimeoutError("timed out"), None])
+        )
+        option_history.fetch_with_backoff(
+            None, "k", self._row(), DAY, Path("."), sleep=slept.append
+        )
+        assert slept == [option_history.BACKOFF["network"][0]]
+        assert slept[0] < option_history.BACKOFF["throttled"][0]
+
+    def test_each_kind_keeps_its_own_budget(self, monkeypatch) -> None:
+        """Meeting a throttle must not spend the network's allowance.
+
+        A single shared counter meant one blip early in a run left the next
+        throttle with fewer attempts than the policy says it has.
+        """
+        slept: list[float] = []
+        monkeypatch.setattr(
+            option_history,
+            "fetch_series",
+            self._raiser([TimeoutError("timed out"), RuntimeError("rate limiting"), None]),
+        )
+        option_history.fetch_with_backoff(
+            None, "k", self._row(), DAY, Path("."), sleep=slept.append
+        )
+        assert slept == [
+            option_history.BACKOFF["network"][0],
+            option_history.BACKOFF["throttled"][0],
+        ], "the second wait started from the first kind's delay"
+
+    def test_running_out_of_attempts_raises_rather_than_waiting_forever(self, monkeypatch) -> None:
+        limit = option_history.BACKOFF["network"][2]
+        monkeypatch.setattr(
+            option_history,
+            "fetch_series",
+            self._raiser([TimeoutError("timed out")] * limit),
+        )
+        with pytest.raises(TimeoutError):
+            option_history.fetch_with_backoff(
+                None, "k", self._row(), DAY, Path("."), sleep=lambda _s: None
+            )
+
+    def test_a_real_failure_is_raised_without_waiting_at_all(self, monkeypatch) -> None:
+        slept: list[float] = []
+        monkeypatch.setattr(
+            option_history, "fetch_series", self._raiser([KeyError("unknown exchange")])
+        )
+        with pytest.raises(KeyError):
+            option_history.fetch_with_backoff(
+                None, "k", self._row(), DAY, Path("."), sleep=slept.append
+            )
+        assert slept == [], "a wrong exchange name was retried as though it might come right"
+
+
+class TestCollectKeepsGoing:
+    """A hole in the chain is not the end of the chain - until it is.
+
+    The first version abandoned four hundred contracts because the two hundred
+    and forty-seventh timed out. Skipping past a bad contract is right. Skipping
+    past a bad *session* - an expired token, a dropped link - is how a job
+    reports success having fetched almost nothing, so a run of failures stops it.
+    """
+
+    class Row:
+        def __init__(self, token: int, symbol: str, strike: float) -> None:
+            self.token, self.symbol, self.strike = token, symbol, strike
+            self.exch_seg, self.expiry = "NFO", date(2026, 9, 8)
+
+    class Master:
+        def __init__(self, rows) -> None:
+            self._rows = rows
+
+        def option_contracts(self, name, *, as_of, n_expiries=1):
+            return self._rows
+
+    def _wire(self, monkeypatch, behaviour):
+        future = self.Row(99, "NIFTYFUT", 0.0)
+        bar = Candle(ts=OPEN, instrument_id=99, tf=1, o=24000.0, h=24000.0, low=24000.0, c=24000.0)
+        monkeypatch.setattr(option_history, "front_future", lambda *a, **k: future)
+        monkeypatch.setattr(option_history, "fetch_series", lambda *a, **k: ([bar], True))
+        monkeypatch.setattr(option_history, "fetch_with_backoff", behaviour)
+
+    def _rows(self, n: int):
+        return [self.Row(i, f"NIFTY{24000 + i * 50}CE", 24000.0 + i * 50) for i in range(n)]
+
+    def test_one_contract_that_will_not_come_is_a_hole_not_an_ending(
+        self, monkeypatch, tmp_path, capsys
+    ) -> None:
+        bar = Candle(ts=OPEN, instrument_id=1, tf=1, o=1.0, h=1.0, low=1.0, c=1.0)
+
+        def behaviour(session, key, row, day, out_dir, **kw):
+            if row.token == 2:
+                raise TimeoutError("connect timeout=7")
+            return ([bar], True)
+
+        self._wire(monkeypatch, behaviour)
+        manifest = option_history.collect(
+            None, "k", self.Master(self._rows(6)), "NIFTY", DAY, n_strikes=99, root=tmp_path
+        )
+
+        assert len(manifest["contracts"]) == 5, "the run stopped at the contract that failed"
+        assert [f["token"] for f in manifest["failed"]] == [2]
+        assert "did not come, moving on" in capsys.readouterr().out
+
+    def test_a_run_of_failures_is_the_session_and_stops_it(
+        self, monkeypatch, tmp_path, capsys
+    ) -> None:
+        def behaviour(session, key, row, day, out_dir, **kw):
+            raise RuntimeError("historical request failed: Invalid Token")
+
+        self._wire(monkeypatch, behaviour)
+        manifest = option_history.collect(
+            None, "k", self.Master(self._rows(40)), "NIFTY", DAY, n_strikes=99, root=tmp_path
+        )
+
+        limit = option_history.CONSECUTIVE_FAILURE_LIMIT
+        assert len(manifest["failed"]) == limit, (
+            f"it kept asking a venue that had refused {limit} times running, which is "
+            "forty pointless requests and a manifest that reads like a quiet day"
+        )
+        assert manifest["contracts"] == []
+        assert "That is the session, not the contracts" in capsys.readouterr().out
+
+    def test_the_counter_resets_on_a_success(self, monkeypatch, tmp_path) -> None:
+        """Scattered failures are not a run of them, and must not trip the brake."""
+        bar = Candle(ts=OPEN, instrument_id=1, tf=1, o=1.0, h=1.0, low=1.0, c=1.0)
+
+        def behaviour(session, key, row, day, out_dir, **kw):
+            if row.token % 2:
+                raise TimeoutError("timed out")
+            return ([bar], True)
+
+        self._wire(monkeypatch, behaviour)
+        manifest = option_history.collect(
+            None, "k", self.Master(self._rows(20)), "NIFTY", DAY, n_strikes=99, root=tmp_path
+        )
+        assert len(manifest["contracts"]) == 10 and len(manifest["failed"]) == 10
+
+    def test_the_failures_are_written_down_not_just_printed(self, monkeypatch, tmp_path) -> None:
+        """A chain with a hole and a chain that never had those strikes look the same.
+
+        The manifest is what the page is built from, so a contract that was
+        asked for and did not arrive has to be distinguishable there from one
+        that was never listed.
+        """
+
+        def behaviour(session, key, row, day, out_dir, **kw):
+            raise TimeoutError("timed out")
+
+        self._wire(monkeypatch, behaviour)
+        option_history.collect(
+            None, "k", self.Master(self._rows(3)), "NIFTY", DAY, n_strikes=99, root=tmp_path
+        )
+        written = json.loads(
+            (tmp_path / f"date={DAY.isoformat()}" / "NIFTY" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert [f["symbol"] for f in written["failed"]] == [r.symbol for r in self._rows(3)]
+        assert all("timed out" in f["why"] for f in written["failed"])

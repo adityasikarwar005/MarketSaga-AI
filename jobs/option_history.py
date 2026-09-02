@@ -70,9 +70,26 @@ HISTORY_ROOT = ROOT / "data" / "raw" / "history"
 # session. So the strategy is a modest pace plus a real backoff, and the thing
 # that makes backoff safe is that every completed contract is already on disk.
 PACE_SECONDS = 1.5
-BACKOFF_START = 20.0
-BACKOFF_MAX = 120.0
-BACKOFF_ATTEMPTS = 5
+
+# Two waits, because these are two different problems and one policy served
+# neither. A throttle is a budget that refills over tens of seconds, so a short
+# retry just spends the run re-earning the block. A dropped connection usually
+# clears on the next attempt, so waiting twenty seconds for one spends four
+# hundred contracts' worth of time on nothing. Each kind keeps its own budget:
+# a run that meets one blip and one throttle has not used up either allowance.
+#
+#   kind        first wait  ceiling  attempts
+BACKOFF = {
+    "throttled": (20.0, 120.0, 5),
+    "network": (2.0, 30.0, 4),
+}
+
+# A contract that will not come is skipped, not fatal - the chain is worth more
+# with a hole in it than not at all. But contract after contract failing is not
+# bad luck with individual contracts, it is the session: an expired token, a
+# dropped link, a venue that has stopped answering. Skipping past that is how a
+# job reports success having fetched nothing.
+CONSECUTIVE_FAILURE_LIMIT = 5
 
 SESSION_OPEN = (9, 15)
 SESSION_CLOSE = (15, 30)
@@ -198,26 +215,42 @@ def fetch_with_backoff(
     day: date,
     out_dir: Path,
     *,
-    attempts: int = BACKOFF_ATTEMPTS,
+    policy: dict[str, tuple[float, float, int]] | None = None,
+    sleep: Any = time.sleep,
 ) -> tuple[list[Candle], bool]:
     """:func:`fetch_series`, waiting out an interruption rather than abandoning the run.
 
     Backing off is only safe because the cache makes a retry idempotent: nothing
     already on disk is re-requested, so an interrupted run resumes where it
     stopped instead of starting the whole band again and re-earning the block.
+
+    Each kind of interruption keeps its own attempt count and its own delay, so
+    meeting a throttle does not spend the network's allowance or start it at the
+    throttle's much longer wait. Anything :func:`transient` does not recognise is
+    raised immediately - waiting is the answer to being told to wait, and a
+    retry that cannot tell a wrong token from a slow one turns a clear failure
+    into a slow one.
     """
-    delay = BACKOFF_START
-    for attempt in range(1, attempts + 1):
+    rules = BACKOFF if policy is None else policy
+    tries: dict[str, int] = {}
+    delay: dict[str, float] = {}
+    while True:
         try:
             return fetch_series(session, api_key, row, day, out_dir)
         except Exception as exc:
             kind = transient(exc)
-            if kind is None or attempt == attempts:
+            if kind is None or kind not in rules:
                 raise
-            print(f"    {kind} on {row.symbol}; waiting {delay:.0f}s (attempt {attempt})")
-            time.sleep(delay)
-            delay = min(delay * 2, BACKOFF_MAX)
-    raise AssertionError("unreachable")
+            first, ceiling, limit = rules[kind]
+            tries[kind] = tries.get(kind, 0) + 1
+            if tries[kind] >= limit:
+                raise
+            delay[kind] = first if kind not in delay else min(delay[kind] * 2, ceiling)
+            print(
+                f"    {kind} on {row.symbol}; waiting {delay[kind]:.0f}s "
+                f"({tries[kind]} of {limit - 1})"
+            )
+            sleep(delay[kind])
 
 
 def collect(
@@ -253,19 +286,31 @@ def collect(
     wanted = {k for k in grid if lo - 1e-6 <= k <= hi + 1e-6}
 
     kept: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     fetched = 0
+    consecutive = 0
     for row in contracts:
         if row.strike not in wanted:
             continue
         try:
             bars, did = fetch_with_backoff(session, api_key, row, day, out_dir)
         except Exception as exc:
-            # Whatever it was, the cache holds every contract fetched before it.
-            # Stopping here and reporting is better than a traceback: the
-            # manifest below still gets written, so the page can be built from
-            # the part of the chain that did arrive.
-            print(f"  {name}: giving up on {row.symbol}, keeping what is cached - {exc}")
-            break
+            # One contract that will not come is a hole in the chain, not the end
+            # of it. The run continues, the failure is recorded in the manifest
+            # so the page can say the chain is short, and the next contract gets
+            # its own chance - the first version of this abandoned four hundred
+            # contracts because the two hundred and forty-seventh timed out.
+            consecutive += 1
+            failed.append({"token": int(row.token), "symbol": row.symbol, "why": str(exc)[:180]})
+            print(f"  {name}: {row.symbol} did not come, moving on - {exc}")
+            if consecutive >= CONSECUTIVE_FAILURE_LIMIT:
+                print(
+                    f"  {name}: {consecutive} in a row. That is the session, not "
+                    "the contracts. Stopping with what is cached."
+                )
+                break
+            continue
+        consecutive = 0
         fetched += int(did)
         if not bars:
             continue  # listed but never traded; a fact, not a failure
@@ -293,12 +338,16 @@ def collect(
         "strike_step": step,
         "atm": atm,
         "contracts": sorted(kept, key=lambda c: (c["strike"], c["right"])),
+        # Recorded rather than dropped: a chain with a hole in it and a chain
+        # that never had those strikes look identical from the page.
+        "failed": failed,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(
         f"  {name}: front future {fut.symbol} closed {level:,.2f}; expiry "
         f"{manifest['expiry']}; {len(kept)} contracts with bars "
         f"({fetched} fetched, {len(kept) - fetched} already cached); strike step {step:g}"
+        + (f"; {len(failed)} could not be fetched" if failed else "")
     )
     return manifest
 
