@@ -560,6 +560,23 @@ def chart() -> None:
     run(_py(), "jobs/chart_history.py", *bake, check=False)
 
 
+def close_out() -> None:
+    """Build a finished day's charts from history, however late you run it.
+
+        python tasks.py close-out                    today
+        python tasks.py close-out --date 2026-09-02
+        python tasks.py close-out --dry-run
+
+    The counterpart to `record`, and the one that does not need the machine to
+    have been awake. `record` has to be running at 09:15; this reads the
+    completed session back out of the vendor's history afterwards, so a laptop
+    that was asleep all day still produces the same charts at eight in the
+    evening. It publishes nothing.
+    """
+    _load_dotenv()
+    run(_py(), "jobs/close_out.py", *sys.argv[2:], check=False)
+
+
 def _load_dotenv() -> None:
     """Read `.env` into this process, for the commands that need a credential.
 
@@ -601,6 +618,7 @@ COMMANDS = {
     "angel-check": angel_check,
     "dashboard": dashboard,
     "chart": chart,
+    "close-out": close_out,
     "status": status,
 }
 
