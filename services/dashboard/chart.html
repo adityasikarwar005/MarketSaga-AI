@@ -8,13 +8,18 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
-/* One contract's minute candles, and what a projection says comes next.
+/* One strike's call and put, minute by minute, and what a projection says next.
  *
- * The whole design problem here is one thing: a projection drawn beside a price
- * series is indistinguishable from history the moment somebody screenshots it.
- * So the projected bars are hollow, sit behind a hatched panel, are separated by
- * a labelled divider, and carry the score the method actually earned. None of
- * that is decoration - it is the difference between a chart and a claim.
+ * The design problem is one thing: a projection drawn beside a price series is
+ * indistinguishable from history the moment somebody screenshots it. So the
+ * projected bars are hollow and dashed, sit behind a hatched panel past a
+ * labelled divider, and carry the score the method actually earned on this same
+ * day. None of that is decoration - it is the difference between a chart and a
+ * claim.
+ *
+ * Call and put are drawn side by side rather than behind a toggle, because a
+ * strike is one position seen from two directions and flipping between them
+ * hides the thing worth seeing: they move against each other.
  */
 :root {
   --bg:#0B0E11; --panel:#12171C; --panel-2:#171D23;
@@ -22,13 +27,15 @@
   --fg:#E6ECF2; --fg-dim:#93A0AD; --fg-faint:#626E7A;
   --accent:#C89B3C; --accent-2:#E4BC63; --accent-dim:#3A2E14;
   --up:#4FA97C; --down:#CC5B52; --warn:#C79245;
+  --ce:#4FA97C; --pe:#CC5B52;
   --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
   --sans:"Archivo",-apple-system,"Segoe UI",Roboto,sans-serif;
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans); font-size:13px; }
 a { color:var(--accent-2); text-decoration:none; }
-.wrap { max-width:1320px; margin:0 auto; padding:0 20px 60px; }
+a:hover { text-decoration:underline; }
+.wrap { max-width:1560px; margin:0 auto; padding:0 20px 60px; }
 
 .top { display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding:14px 0;
        border-bottom:1px solid var(--line); }
@@ -36,41 +43,52 @@ a { color:var(--accent-2); text-decoration:none; }
 .spacer { flex:1; }
 .meta { font-family:var(--mono); font-size:12px; color:var(--fg-dim); }
 
-.controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:16px 0 10px; }
-select, button { font-family:var(--mono); font-size:12px; background:var(--panel-2);
-  color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; }
+.controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:16px 0 6px; }
+label { font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--fg-faint); }
+button { font-family:var(--mono); font-size:12px; background:var(--panel-2); cursor:pointer;
+  color:var(--fg-dim); border:1px solid var(--line); border-radius:6px; padding:6px 11px; }
+button:hover { color:var(--fg); border-color:var(--fg-faint); }
 button[aria-pressed="true"] { background:var(--accent-dim); border-color:var(--accent);
   color:var(--accent-2); }
-label { font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
-  color:var(--fg-faint); margin-right:2px; }
+.strikes { display:flex; gap:5px; flex-wrap:wrap; }
+.strikes button { padding:5px 9px; }
+.strikes button .atm { color:var(--accent); font-size:9px; margin-left:4px; }
 
+.grid { display:grid; gap:14px; margin-top:10px;
+        grid-template-columns:repeat(auto-fit,minmax(460px,1fr)); }
 .panel { background:var(--panel); border:1px solid var(--line-soft); border-radius:10px;
   overflow:hidden; }
 .panel h2 { margin:0; padding:11px 16px; font-size:12px; letter-spacing:.06em;
   text-transform:uppercase; color:var(--fg-dim); border-bottom:1px solid var(--line-soft);
-  background:var(--panel-2); display:flex; gap:12px; align-items:baseline; }
+  background:var(--panel-2); display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+.panel h2 .tag { font-family:var(--mono); padding:1px 6px; border-radius:4px; font-size:10px; }
+.panel h2 .tag.ce { background:rgba(79,169,124,.15); color:var(--ce); }
+.panel h2 .tag.pe { background:rgba(204,91,82,.15); color:var(--pe); }
 .panel h2 .sub { font-family:var(--mono); font-size:11px; color:var(--fg-faint);
-  text-transform:none; letter-spacing:0; }
-#chart { display:block; width:100%; height:460px; }
+  text-transform:none; letter-spacing:0; margin-left:auto; }
+canvas { display:block; width:100%; height:420px; }
 
-.legend { display:flex; gap:20px; flex-wrap:wrap; padding:10px 16px;
-  border-top:1px solid var(--line-soft); font-size:12px; color:var(--fg-dim); }
+.legend { display:flex; gap:18px; flex-wrap:wrap; padding:9px 16px;
+  border-top:1px solid var(--line-soft); font-size:11px; color:var(--fg-dim); }
 .key { display:inline-flex; align-items:center; gap:7px; }
-.swatch { width:11px; height:15px; border-radius:2px; display:inline-block; }
+.swatch { width:10px; height:14px; border-radius:2px; display:inline-block; }
 .swatch.up { background:var(--up); } .swatch.down { background:var(--down); }
 .swatch.proj { background:transparent; border:1.5px dashed var(--accent); }
 
-.verdict { margin-top:14px; background:var(--panel); border:1px solid var(--line-soft);
-  border-left:3px solid var(--warn); border-radius:10px; padding:14px 16px; }
-.verdict h3 { margin:0 0 8px; font-size:12px; letter-spacing:.06em; text-transform:uppercase;
+.verdict { margin-top:16px; background:var(--panel); border:1px solid var(--line-soft);
+  border-left:3px solid var(--warn); border-radius:10px; padding:15px 17px; }
+.verdict h3 { margin:0 0 9px; font-size:12px; letter-spacing:.06em; text-transform:uppercase;
   color:var(--warn); }
-.verdict p { margin:0 0 10px; color:var(--fg-dim); line-height:1.6; }
+.verdict p { margin:0 0 11px; color:var(--fg-dim); line-height:1.65; max-width:88ch; }
 table { border-collapse:collapse; font-family:var(--mono); font-size:12px; }
-th { text-align:right; padding:5px 14px 5px 0; color:var(--fg-faint); font-weight:500;
+th { text-align:right; padding:5px 16px 5px 0; color:var(--fg-faint); font-weight:500;
   font-size:10px; letter-spacing:.07em; text-transform:uppercase; }
-td { text-align:right; padding:3px 14px 3px 0; color:var(--fg-dim); }
-td.bad { color:var(--down); }
+td { text-align:right; padding:3px 16px 3px 0; color:var(--fg-dim); }
+td.bad { color:var(--down); } td.good { color:var(--up); }
 .muted { color:var(--fg-faint); }
+.note { margin-top:11px; padding-top:11px; border-top:1px solid var(--line-soft);
+  color:var(--fg-faint); line-height:1.6; font-size:12px; max-width:88ch; }
 </style>
 </head>
 <body>
@@ -80,26 +98,42 @@ td.bad { color:var(--down); }
     <span class="brand">MarketSage&nbsp;<em>Chart</em></span>
     <span class="meta" id="meta">—</span>
     <span class="spacer"></span>
+    <!-- No link to live.html. It is deliberately off the publish allowlist -
+         it polls /api/live, which only the local dashboard process serves - so
+         linking it from here would publish a page pointing at a 404. There is a
+         test for exactly this and it caught this link. -->
     <a href="index.html">overview</a>
     <a href="desk.html">desk</a>
   </div>
 
   <div class="controls">
-    <label for="strike">strike</label>
-    <select id="strike"></select>
-    <button id="ce" data-right="CE" aria-pressed="true">CE</button>
-    <button id="pe" data-right="PE" aria-pressed="false">PE</button>
-    <span class="spacer"></span>
-    <span class="meta" id="last">—</span>
+    <label>underlying</label>
+    <span id="unders"></span>
+    <span style="width:10px"></span>
+    <label>strike</label>
+    <span class="strikes" id="strikes"></span>
   </div>
 
-  <div class="panel">
-    <h2>Minute candles <span class="sub" id="title">—</span></h2>
-    <canvas id="chart"></canvas>
-    <div class="legend">
-      <span class="key"><i class="swatch up"></i> recorded, close above open</span>
-      <span class="key"><i class="swatch down"></i> recorded, close below open</span>
-      <span class="key"><i class="swatch proj"></i> projected — hollow, hatched, and did not happen</span>
+  <div class="grid">
+    <div class="panel">
+      <h2><span class="tag ce">CALL</span> <span id="ceTitle">—</span>
+          <span class="sub" id="ceSub">—</span></h2>
+      <canvas id="ceChart"></canvas>
+      <div class="legend">
+        <span class="key"><i class="swatch up"></i> close above open</span>
+        <span class="key"><i class="swatch down"></i> close below open</span>
+        <span class="key"><i class="swatch proj"></i> projected: box q25–q75, whisker q10–q90, bar the median — did not happen</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2><span class="tag pe">PUT</span> <span id="peTitle">—</span>
+          <span class="sub" id="peSub">—</span></h2>
+      <canvas id="peChart"></canvas>
+      <div class="legend">
+        <span class="key"><i class="swatch up"></i> close above open</span>
+        <span class="key"><i class="swatch down"></i> close below open</span>
+        <span class="key"><i class="swatch proj"></i> projected: box q25–q75, whisker q10–q90, bar the median — did not happen</span>
+      </div>
     </div>
   </div>
 
@@ -107,6 +141,7 @@ td.bad { color:var(--down); }
     <h3>What the projection is worth</h3>
     <p id="verdictText" class="muted"></p>
     <table id="scoreTable"></table>
+    <p class="note" id="caveat"></p>
   </div>
 
 </div>
@@ -114,60 +149,65 @@ td.bad { color:var(--down); }
 <script src="chart_data.js"></script>
 <script>
 const D = window.CHART;
-const cv = document.getElementById("chart");
-const ctx = cv.getContext("2d");
-let right = "CE";
-// Recorded bars shown. Enough for the shape of the session, few enough that the
-// projection is legible beside them rather than crushed against the axis.
-const WINDOW = 75;
+
+// A trailing window, not the whole session. Wide enough that the projected hour
+// is a minority of the picture: at 75 bars the hatched panel covered four fifths
+// of the chart, and a marking that covers almost everything stops marking
+// anything. Three hours of real trading against one projected one.
+const WINDOW = 180;
+
+let block = D.blocks[0];
+let strike = block.atm;
 
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const $ = id => document.getElementById(id);
 
-function strikes() {
-  return [...new Set(D.series.map(s => s.strike))].sort((a, b) => a - b);
-}
-function current() {
-  const k = Number(document.getElementById("strike").value);
-  return D.series.find(s => s.strike === k && s.right === right);
-}
+const strikesOf = b => [...new Set(b.series.map(s => s.strike))].sort((a, b) => a - b);
+const seriesFor = right => block.series.find(s => s.strike === strike && s.right === right);
 
-function fit() {
+function fit(cv) {
   // Redraw at the device's pixel density; a canvas scaled by CSS alone renders
-  // candles a pixel wide as a smear.
+  // a one-pixel wick as a smear.
   const ratio = window.devicePixelRatio || 1;
   cv.width = cv.clientWidth * ratio;
   cv.height = cv.clientHeight * ratio;
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  cv.getContext("2d").setTransform(ratio, 0, 0, ratio, 0, 0);
 }
 
-function draw() {
-  const s = current();
-  fit();
+function draw(cv, s) {
+  fit(cv);
+  const ctx = cv.getContext("2d");
   const W = cv.clientWidth, H = cv.clientHeight;
   ctx.clearRect(0, 0, W, H);
   if (!s || !s.recorded.length) {
     ctx.fillStyle = css("--fg-faint"); ctx.font = "13px " + css("--sans");
-    ctx.fillText("nothing recorded for this contract", 20, 30);
+    ctx.fillText("this contract did not trade today", 20, 34);
     return;
   }
 
-  // A trailing window, not the whole session. With 184 recorded bars against
-  // eight projected ones the projection was three percent of the width - the
-  // part the chart exists to show, squeezed into the margin.
   const rec = s.recorded.slice(-WINDOW), proj = s.projected || [];
-  const all = [...rec, ...proj];
-  const pad = { l: 8, r: 66, t: 30, b: 26 };
+  const pad = { l: 8, r: 62, t: 30, b: 26 };
+
+  // Projected bars sit on the same time axis as the real ones, at the minute
+  // each was a forecast *of*. The day is over, so the projection lands on top of
+  // an hour that actually happened — which is the only arrangement where a
+  // reader can judge it instead of taking the table's word for it.
+  const at = new Map(rec.map((b, i) => [b.t, i]));
+  const placed = proj.map(p => ({ ...p, i: at.get(p.t) })).filter(p => p.i !== undefined);
+  const anchorAt = at.has(s.anchor) ? at.get(s.anchor) : rec.length;
+
+  const all = [...rec, ...placed];
   const lo = Math.min(...all.map(b => b.l)), hi = Math.max(...all.map(b => b.h));
   const span = (hi - lo) || 1;
   const y = v => pad.t + (H - pad.t - pad.b) * (1 - (v - lo) / span);
-  const n = all.length;
-  const bw = Math.max(1.2, (W - pad.l - pad.r) / n * 0.68);
+  const n = rec.length;
+  const bw = Math.max(1.2, (W - pad.l - pad.r) / n * 0.66);
   const x = i => pad.l + (W - pad.l - pad.r) * (i + 0.5) / n;
 
   // The hatched panel behind everything projected. A reader who takes in only
   // the shape still sees that the right-hand side is a different kind of thing.
-  if (proj.length) {
-    const x0 = x(rec.length) - bw;
+  if (placed.length) {
+    const x0 = x(anchorAt) - bw;
     ctx.save();
     ctx.fillStyle = "rgba(200,155,60,0.06)";
     ctx.fillRect(x0, pad.t, W - pad.r - x0, H - pad.t - pad.b);
@@ -180,15 +220,15 @@ function draw() {
     ctx.strokeStyle = css("--accent"); ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x0, pad.t); ctx.lineTo(x0, H - pad.b); ctx.stroke();
     ctx.setLineDash([]);
-    // Above the plot, right-aligned to the divider, so it cannot be clipped by
-    // the price axis however narrow the projection is.
+    // Above the plot and right-aligned to the divider, so it cannot be clipped
+    // by the price axis however narrow the projection is.
+    // Inside the hatched region and left-aligned to its own divider. Aligned
+    // the other way it ran off the left edge of the canvas as soon as the
+    // anchor moved early in the window, and printed "30 — did not happen".
     ctx.fillStyle = css("--accent"); ctx.font = "10px " + css("--mono");
-    ctx.textAlign = "right";
-    ctx.fillText("PROJECTED — did not happen →", x0 - 8, 18);
-    ctx.textAlign = "left";
+    ctx.fillText(`← PROJECTED FROM ${s.anchor} — did not happen`, x0 + 8, 18);
   }
 
-  // Price axis.
   ctx.font = "10px " + css("--mono"); ctx.fillStyle = css("--fg-faint");
   ctx.strokeStyle = css("--line-soft"); ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
@@ -197,84 +237,127 @@ function draw() {
     ctx.fillText(v.toFixed(1), W - pad.r + 8, yy + 3);
   }
 
-  all.forEach((b, i) => {
-    const projected = i >= rec.length;
-    const up = b.c >= b.o;
-    const colour = projected ? css("--accent") : (up ? css("--up") : css("--down"));
+  // What happened, first and filled.
+  rec.forEach((b, i) => {
+    const colour = b.c >= b.o ? css("--up") : css("--down");
     const cx = x(i);
     ctx.strokeStyle = colour; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(cx, y(b.h)); ctx.lineTo(cx, y(b.l)); ctx.stroke();
-
     const top = y(Math.max(b.o, b.c)), bot = y(Math.min(b.o, b.c));
-    const h = Math.max(1, bot - top);
-    if (projected) {
-      // Hollow, dashed. A filled projected candle is a lie with a light source.
-      ctx.setLineDash([3, 2]);
-      ctx.strokeRect(cx - bw / 2, top, bw, h);
-      ctx.setLineDash([]);
-    } else {
-      ctx.fillStyle = colour;
-      ctx.fillRect(cx - bw / 2, top, bw, h);
-    }
+    ctx.fillStyle = colour;
+    ctx.fillRect(cx - bw / 2, top, bw, Math.max(1, bot - top));
   });
 
-  // Time axis, thinned so labels never collide.
-  ctx.fillStyle = css("--fg-faint");
-  const every = Math.ceil(n / 10);
-  all.forEach((b, i) => {
-    if (i % every) return;
-    ctx.fillText(b.t, x(i) - 14, H - pad.b + 15);
+  // What was claimed, drawn over it — hollow and dashed, so it reads as an
+  // overlay on the record rather than as more of the record. A filled projected
+  // candle is a lie with a light source.
+  //
+  // The body is the q25–q75 range, not open-to-close. A projection's open and
+  // close are both medians and they barely move — a driftless forward is a
+  // martingale — so an open-to-close body came out one pixel tall inside a
+  // sixty-pixel whisker, and the bars rendered as bare vertical lines. The
+  // interquartile range is also the more honest shape: this is a distribution,
+  // and drawing it as a distribution is not a compromise.
+  const pw = Math.max(4, bw * 2.4);
+  placed.forEach(b => {
+    const cx = x(b.i);
+    ctx.strokeStyle = css("--accent"); ctx.lineWidth = 1.1;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath(); ctx.moveTo(cx, y(b.h)); ctx.lineTo(cx, y(b.l)); ctx.stroke();
+    const top = y(b.q75), bot = y(b.q25);
+    ctx.strokeRect(cx - pw / 2, top, pw, Math.max(3, bot - top));
+    ctx.setLineDash([]);
+    // The median, solid, so the centre of the claim is readable at a glance.
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(cx - pw / 2, y(b.c)); ctx.lineTo(cx + pw / 2, y(b.c)); ctx.stroke();
   });
+  ctx.lineWidth = 1;
+
+  // Time axis, centred on its bar and clamped inside the plot - the first label
+  // was being drawn at a negative x and rendering as "2:31".
+  ctx.fillStyle = css("--fg-faint");
+  ctx.textAlign = "center";
+  const every = Math.ceil(n / 9);
+  rec.forEach((b, i) => {
+    if (i % every) return;
+    ctx.fillText(b.t, Math.min(Math.max(x(i), pad.l + 16), W - pad.r - 16), H - pad.b + 15);
+  });
+  ctx.textAlign = "left";
+}
+
+function panel(right, cvId, titleId, subId) {
+  const s = seriesFor(right);
+  $(titleId).textContent = s ? `${s.strike} ${right}` : "—";
+  $(subId).textContent = s && s.recorded.length
+    ? `last ${s.recorded[s.recorded.length - 1].c.toFixed(2)} · `
+      + `${s.recorded.length} real bars · ${s.projected.length} projected`
+      + (s.iv !== null ? ` · iv ${(s.iv * 100).toFixed(1)}%` : " · iv not invertible")
+    : "no bars";
+  draw($(cvId), s);
 }
 
 function render() {
-  const s = current();
-  document.getElementById("title").textContent =
-    s ? `${s.strike} ${s.right} · expiry ${D.expiry} · last ${Math.min(WINDOW, s.recorded.length)} of ${s.recorded.length} recorded, ${s.projected.length} projected`
-      : "—";
-  document.getElementById("last").textContent =
-    s && s.recorded.length ? `last ${s.recorded[s.recorded.length - 1].c.toFixed(2)}` : "";
-  draw();
+  panel("CE", "ceChart", "ceTitle", "ceSub");
+  panel("PE", "peChart", "peTitle", "peSub");
+
+  $("meta").textContent =
+    `${block.day} · ${block.name} forward ${block.forward.close.toLocaleString("en-IN")} `
+    + `· expiry ${block.expiry} · real candles to ${block.as_of} IST`;
+
+  const sc = block.score;
+  const s = seriesFor("CE");
+  $("verdictText").innerHTML =
+    `Every filled candle above is a real one-minute bar from the exchange. The hollow ones `
+    + `are not. Each contract's implied volatility is inverted from its own price against the `
+    + `<strong>same-minute future</strong>, the forward is then diffused without drift — so the `
+    + `only thing genuinely being forecast is time decay. `
+    + (s ? `This session is over, so the projection is anchored at <strong>${s.anchor}</strong> `
+        + `and drawn <em>on top of</em> the hour that actually followed: the hollow bars and the `
+        + `filled ones underneath them cover the same minutes, and you can read the difference `
+        + `off the chart. ` : "")
+    + `Measured that way over every minute of ${sc.measured_on} against `
+    + `<strong>${sc.baseline}</strong>, it <strong>${sc.verdict}</strong>.`;
+
+  $("scoreTable").innerHTML =
+    "<tr><th>horizon</th><th>n</th><th>model MAE</th><th>baseline MAE</th><th>better by</th></tr>"
+    + sc.horizons.map(h => {
+        const d = -h.delta_pct;
+        return `<tr><td>${h.minutes}m</td><td>${h.n.toLocaleString("en-IN")}</td>`
+             + `<td>${h.model_mae.toFixed(3)}</td><td>${h.baseline_mae.toFixed(3)}</td>`
+             + `<td class="${d < 0 ? "bad" : "good"}">${d.toFixed(2)}%</td></tr>`;
+      }).join("");
+
+  $("caveat").textContent = sc.caveat + ". The point estimate is " + sc.point_estimate + ".";
+}
+
+function buildStrikes() {
+  const ks = strikesOf(block);
+  if (!ks.includes(strike)) strike = block.atm;
+  $("strikes").innerHTML = ks.map(k =>
+    `<button data-k="${k}" aria-pressed="${k === strike}">${k.toLocaleString("en-IN")}`
+    + `${k === block.atm ? '<span class="atm">ATM</span>' : ""}</button>`).join("");
+  for (const b of $("strikes").querySelectorAll("button")) {
+    b.onclick = () => { strike = Number(b.dataset.k); buildStrikes(); render(); };
+  }
 }
 
 function init() {
-  document.getElementById("meta").textContent =
-    `${D.day} · NIFTY ${D.spot.toLocaleString("en-IN")} · recorded to ${D.as_of} IST`;
-
-  const sel = document.getElementById("strike");
-  const atm = strikes().reduce((a, b) => Math.abs(b - D.spot) < Math.abs(a - D.spot) ? b : a);
-  sel.innerHTML = strikes().map(k =>
-    `<option value="${k}" ${k === atm ? "selected" : ""}>${k}${k === atm ? "  (ATM)" : ""}</option>`
-  ).join("");
-  sel.onchange = render;
-
-  for (const id of ["ce", "pe"]) {
-    document.getElementById(id).onclick = e => {
-      right = e.currentTarget.dataset.right;
-      document.getElementById("ce").setAttribute("aria-pressed", String(right === "CE"));
-      document.getElementById("pe").setAttribute("aria-pressed", String(right === "PE"));
-      render();
+  $("unders").innerHTML = D.blocks.map((b, i) =>
+    `<button data-i="${i}" aria-pressed="${i === 0}">${b.name}</button>`).join(" ");
+  for (const b of $("unders").querySelectorAll("button")) {
+    b.onclick = () => {
+      block = D.blocks[Number(b.dataset.i)];
+      strike = block.atm;
+      for (const o of $("unders").querySelectorAll("button")) {
+        o.setAttribute("aria-pressed", String(o === b));
+      }
+      buildStrikes(); render();
     };
   }
-
-  const sc = D.score;
-  document.getElementById("verdictText").innerHTML =
-    `The projected candles hold the volatility surface fixed, let the clock run and let the ` +
-    `forward diffuse without drift — so the only thing genuinely forecast is time decay. ` +
-    `Measured on this same session against <strong>${sc.baseline}</strong>, it ` +
-    `<strong>${sc.verdict}</strong>. The bars are drawn because you asked to see them, and ` +
-    `they are drawn hollow because they did not happen.`;
-  document.getElementById("scoreTable").innerHTML =
-    "<tr><th>horizon</th><th>n</th><th>model MAE</th><th>baseline MAE</th><th>better by</th></tr>" +
-    sc.horizons.map(h => {
-      const d = 1 - h.model_mae / h.baseline_mae;
-      return `<tr><td>${h.minutes}m</td><td>${h.n}</td><td>${h.model_mae.toFixed(3)}</td>` +
-             `<td>${h.baseline_mae.toFixed(3)}</td>` +
-             `<td class="${d < 0 ? "bad" : ""}">${(d * 100).toFixed(1)}%</td></tr>`;
-    }).join("");
-
+  buildStrikes();
   render();
-  window.addEventListener("resize", draw);
+  window.addEventListener("resize", render);
 }
 init();
 </script>

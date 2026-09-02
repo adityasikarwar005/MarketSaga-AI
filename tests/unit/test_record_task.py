@@ -92,9 +92,17 @@ def test_the_env_file_is_loaded_before_the_recorder_starts(tasks, launched, monk
 
 def test_the_loader_does_not_overwrite_a_real_environment_variable(tasks, monkeypatch, tmp_path):
     """An explicit `MARKETSAGE_ENV=research` on the command line must win over
-    the file, or the safety switch can be flipped by a stale checkout."""
-    monkeypatch.setattr(tasks, "ROOT", tmp_path)
-    (tmp_path / ".env").write_text("MARKETSAGE_ENV=paper\nSOMETHING_NEW=x\n", encoding="utf-8")
+    the file, or the safety switch can be flipped by a stale checkout.
+
+    Patched at `dotenv.ENV_FILE` rather than at `tasks.ROOT`: the parsing
+    moved to `libs.ms_core.dotenv` so `jobs/trading_day.py` could share it,
+    and one canonical answer to "where is `.env`" is the point of the move.
+    """
+    from libs.ms_core import dotenv
+
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(dotenv, "ENV_FILE", env_file)
+    env_file.write_text("MARKETSAGE_ENV=paper\nSOMETHING_NEW=x\n", encoding="utf-8")
     monkeypatch.setenv("MARKETSAGE_ENV", "research")
     monkeypatch.delenv("SOMETHING_NEW", raising=False)
     tasks._load_dotenv()

@@ -533,19 +533,43 @@ def _today():
     return date.today()
 
 
-def _load_dotenv() -> None:
-    """Minimal .env loader - avoids a dependency for six lines of work."""
-    import os
+def chart() -> None:
+    """Fetch a day's real option candles and bake them into the chart page.
 
-    env_file = ROOT / ".env"
-    if not env_file.exists():
-        return
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
+        python tasks.py chart                  today, NIFTY and BankNifty
+        python tasks.py chart --date 2026-09-02 --strikes 8
+
+    Two steps because they fail differently. The fetch talks to a throttled
+    vendor endpoint and caches every contract as it lands, so a block costs a
+    wait rather than the run; the bake is pure arithmetic over that cache and is
+    free to repeat. Running them separately is why a rate limit does not lose
+    an afternoon of downloads.
+    """
+    _load_dotenv()
+    rest = sys.argv[2:]
+    if "--date" not in rest:
+        rest += ["--date", _today().isoformat()]
+    if run(_py(), "jobs/option_history.py", *rest, check=False) != 0:
+        print("  the fetch did not finish. What it cached is still usable - re-run it.")
+    # `--strikes` decides how much to fetch and means nothing to the bake, which
+    # reads whatever the cache holds. Drop the flag and its value together.
+    bake = list(rest)
+    if "--strikes" in bake:
+        i = bake.index("--strikes")
+        bake = bake[:i] + bake[i + 2 :]
+    run(_py(), "jobs/chart_history.py", *bake, check=False)
+
+
+def _load_dotenv() -> None:
+    """Read `.env` into this process, for the commands that need a credential.
+
+    The parsing moved to `libs.ms_core.dotenv` so the unattended runner shares
+    it rather than going without - see that module for the two trading days
+    that cost.
+    """
+    from libs.ms_core import dotenv
+
+    dotenv.load()
 
 
 COMMANDS = {
@@ -576,6 +600,7 @@ COMMANDS = {
     "angel-history": angel_history,
     "angel-check": angel_check,
     "dashboard": dashboard,
+    "chart": chart,
     "status": status,
 }
 
