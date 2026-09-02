@@ -2762,3 +2762,157 @@ Nothing irreplaceable in model terms — no gate depended on 2026-09-01 or
 today the honest status of the daily recorder was "written, scheduled, and never
 observed to work", and it was being carried as done. One live session on
 2026-08-31, driven by hand, remains the only day this project has recorded.
+
+---
+
+# Addendum — the historical endpoint had never fetched a bar, 2026-09-02
+
+The ask was ordinary: draw the current candles for every call and put, and the
+projection beside them, for NIFTY **and BankNifty**. BankNifty was the problem.
+The recorder has run for one session, on 2026-08-31, on NIFTY only, so there was
+no BankNifty to draw. Angel's historical endpoint holds a rolling ~30 days of
+one-minute bars for every listed contract, which is the obvious source - and it
+turned out never to have worked.
+
+## The websocket's vocabulary was being sent to a REST endpoint
+
+`historical_candles` validated its `exchange` argument against `EXCHANGE_TYPE`
+and then forwarded the name to `getCandleData`:
+
+```python
+EXCHANGE_TYPE = {"NSE_CM": 1, "NSE_FO": 2, ...}   # streaming exchange codes
+if exchange not in EXCHANGE_TYPE:
+    raise KeyError(...)
+params = {"exchange": exchange, ...}              # sent to REST
+```
+
+`getCandleData` has never heard of `NSE_CM`. It wants `NSE`, `NFO`, `BSE`,
+`BFO`, `MCX`, `CDS` - which is also, exactly, what the scrip master already
+carries in `exch_seg`. The websocket map was the odd vocabulary out, and it was
+the one being validated against.
+
+Probed against the live API in one run:
+
+```
+index NIFTY   exchange='NSE_CM'  -> DataException: ... b''
+index NIFTY   exchange='NSE'     -> status True, SUCCESS
+option BN CE  exchange='NSE_FO'  -> DataException: ... b''
+option BN CE  exchange='NFO'     -> b'Access denied because of exceeding access rate'
+```
+
+The fourth line is the one that settles it: an *error about rate* is proof the
+endpoint parsed the name. The first and third are empty bodies.
+
+**Why it was invisible, and it is a good one.** The empty body is byte for byte
+what the throttle returns - and this repository had already met the throttle,
+measured it, written it up in this file, and added `HISTORY_MIN_INTERVAL` to
+pace around it. So the wrong exchange name produced the exact signature of a
+problem that was already understood, already documented, and already had a fix
+in the code. Every historical call read as "we are being rate limited again".
+There was no reason to look further, and nobody did.
+
+Worse, the investigation recorded in *this same file* used the right names:
+`NIFTY index (26000, NSE) -> status True, 0 rows`. The vocabulary was correct
+while it was being explored by hand and wrong in what shipped, which is the
+narrower version of the same lesson as the unattended runner one addendum up:
+the path exercised interactively and the path that runs are not the same path.
+
+`HISTORY_EXCHANGES` is now the REST set, validated against, and a streaming name
+is refused with a message that names which vocabulary it belongs to. The
+throttle's plain-body answer is also caught and re-raised as itself rather than
+surfacing as the SDK's "couldn't parse the JSON response".
+
+## What the endpoint actually gives, now that it answers
+
+Two questions this file left open are now settled:
+
+* **The front-month index future returns candles.** Recorded above as "not yet
+  known". It does: 376 one-minute bars for `NIFTY29SEP26FUT` and 375 for
+  `BANKNIFTY29SEP26FUT` on 2026-09-02. This matters more than convenience - the
+  index itself has no candles, and the future is the forward that options are
+  actually priced against, which M14 already had to learn the hard way.
+* **The throttle lifts.** The half-hour outage recorded earlier followed four
+  logins; a run of candle requests recovers in seconds. Pacing alone does not
+  avoid it (0.5s blocked inside six requests, 2.5s inside seven), so
+  `jobs/option_history.py` pairs a modest pace with real backoff, and caches
+  every contract to disk so a block costs a wait rather than the run.
+
+44 contracts across two underlyings, 16,426 real one-minute bars, fetched.
+
+## The projection had to change shape, and the reason is in this file already
+
+The recorded path fits a volatility surface across the chain, which is legitimate
+because a recorded chain is quotes captured at one instant. Historical candles
+are not that: each bar is one contract's own prints inside one minute.
+`PriceBasis` measured what happens if that distinction is ignored - **36.9% of
+equally-spaced strike triples price a negative butterfly** - so fitting a smile
+on reconstructed closes would have reproduced a defect this file already carries
+a section about.
+
+So `jobs/chart_history.py` never sets two strikes against each other. Each
+contract's volatility is inverted from its own price against the future's price
+**from the same minute**, and the forward is diffused at that one number. It is
+a weaker model - flat vol, no smile dynamics - and it is the strongest one the
+data supports.
+
+One thing improves in the process. With volatility flat, Black-76 is monotone in
+the forward, so the q-th price quantile is exactly the price at the q-th forward
+quantile, reflected for puts. No simulation is needed, the answer is exact and
+deterministic, and it is cheap enough to backtest over every minute of the day
+rather than a sample. `jobs/option_forecast.py` simulates because it re-reads a
+smile at the new moneyness and genuinely loses that monotonicity; the closed form
+is checked against a 40,000-path Monte Carlo of the same process in
+`tests/unit/test_chart_history.py`.
+
+The reflection is the part that would have failed quietly. A put is *decreasing*
+in the forward, so its upper price quantile comes from the forward's lower one.
+Mapping both sides the same way inverts the band on puts alone - calls keep
+looking right - and the renderer would have drawn the inverted box without
+complaint. That is the theta-sign defect's shape exactly, and it has its own test.
+
+## What the projection is worth, measured on real bars
+
+Every minute of 2026-09-02, 22 contracts per underlying, against "it will be what
+it is now":
+
+=========  =========  =======  ===========  ==============
+underlying horizon    n        model MAE    vs baseline
+=========  =========  =======  ===========  ==============
+NIFTY      5m         7,692    4.178        +0.11% worse
+NIFTY      15m        7,492    6.074        -0.22% better
+NIFTY      30m        7,185    8.047        -1.27% better
+NIFTY      60m        6,589    12.012       -2.50% better
+BANKNIFTY  5m         7,942    13.107       -0.01% better
+BANKNIFTY  15m        7,729    20.417       -0.07% better
+BANKNIFTY  30m        7,401    28.254       -0.09% better
+BANKNIFTY  60m        6,750    39.214       -0.15% better
+=========  =========  =======  ===========  ==============
+
+**This is not a win, and it is important not to report it as one.** The margins
+are 0.01% to 2.5%, and `n` is not a sample size: consecutive forecasts on the
+same contract share almost all of their outcome, so the effective count is nearer
+the number of contracts than to seven thousand. One session.
+
+What is worth noticing is the *pattern*, because it is the one the method
+predicts of itself. The only thing being forecast is time decay. NIFTY's expiry
+was six days out and BankNifty's twenty-seven, and the edge is an order of
+magnitude larger on NIFTY and grows with the horizon on both. A method whose
+single mechanism is theta should show exactly that, and does. That is a
+consistency check passing, not a result.
+
+Both the numbers and the caveat are printed under the chart, not left here.
+
+## The projection was being drawn into a closed market
+
+Found while looking at the page. The projection anchored on the last recorded
+bar, which on a finished day is 15:30 - so every projected bar landed between
+15:35 and 16:30, in a market that is shut. Nothing can trade into those minutes,
+the forecast can never be checked, and an hour of diffusion into them produced
+the widest band on the page and set the chart's vertical scale.
+
+On a completed day the anchor now moves back by the longest horizon drawn, so the
+projection lands **on top of the last hour that actually happened**. The real
+bars stay filled, the projection stays hollow, and the overlap is the point: a
+reader can see for themselves that on 2026-09-02 the 24000 CE was projected to
+sit near 103 at the close and printed 86.25 - inside the q10-q90 band, well under
+the median. A table saying "-2.50%" cannot show that.

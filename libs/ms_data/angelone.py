@@ -91,6 +91,28 @@ MODE_SNAP_QUOTE = 3
 # SmartAPI exchange type codes, as sent on the websocket.
 EXCHANGE_TYPE = {"NSE_CM": 1, "NSE_FO": 2, "BSE_CM": 3, "BSE_FO": 4, "MCX_FO": 5, "CDE_FO": 7}
 
+# The REST endpoints do not speak the websocket's vocabulary. `getCandleData`
+# wants these names, and they are also exactly what the scrip master's
+# `exch_seg` already holds - so a caller holding a `ScripRow` has the right
+# string without translating anything, which is the reason to prefer these.
+#
+# Sending a streaming name here does not error. It comes back as an empty body,
+# which is indistinguishable from the throttle documented at
+# HISTORY_MIN_INTERVAL below - so the wrong vocabulary reads as "we are being
+# rate limited" indefinitely. That cost every historical call this repository
+# had ever made; see docs/model_audit.md.
+HISTORY_EXCHANGES = frozenset({"NSE", "NFO", "BSE", "BFO", "MCX", "CDS", "NCO", "NCDEX"})
+
+# What a caller who reached for the streaming names above probably meant.
+HISTORY_EXCHANGE_FOR_STREAM = {
+    "NSE_CM": "NSE",
+    "NSE_FO": "NFO",
+    "BSE_CM": "BSE",
+    "BSE_FO": "BFO",
+    "MCX_FO": "MCX",
+    "CDE_FO": "CDS",
+}
+
 # A price outside this band is not a price. NIFTY is five figures, a far OTM
 # option is a few paise, and nothing legitimate on these exchanges sits outside
 # it - so a value that does is a scaling error, not a market.
@@ -1158,10 +1180,22 @@ def historical_candles(
 
     An empty response is not an error: a holiday, a halt, or a range before the
     contract listed all legitimately have no bars.
+
+    ``exchange`` is the **REST** name - ``NSE``, ``NFO``, ... - which is what a
+    :class:`ScripRow` carries in ``exch_seg``. It is not the websocket's
+    ``NSE_CM``/``NSE_FO``; see :data:`HISTORY_EXCHANGES`.
     """
     envmod.require_broker_credentials()
-    if exchange not in EXCHANGE_TYPE:
-        raise KeyError(f"unknown exchange {exchange!r}; known: {sorted(EXCHANGE_TYPE)}")
+    if exchange not in HISTORY_EXCHANGES:
+        meant = HISTORY_EXCHANGE_FOR_STREAM.get(exchange)
+        hint = (
+            f" That is the websocket's name for it; this endpoint wants {meant!r}." if meant else ""
+        )
+        raise KeyError(
+            f"unknown exchange {exchange!r} for the historical endpoint.{hint} "
+            f"Known: {sorted(HISTORY_EXCHANGES)}. A ScripRow's `exch_seg` is "
+            "already one of these."
+        )
     if end < start:
         raise ValueError(f"end {end.isoformat()} precedes start {start.isoformat()}")
 
@@ -1189,7 +1223,19 @@ def historical_candles(
             "fromdate": window_start.astimezone(HISTORY_TZ).strftime("%Y-%m-%d %H:%M"),
             "todate": window_end.astimezone(HISTORY_TZ).strftime("%Y-%m-%d %H:%M"),
         }
-        payload = call(params)
+        try:
+            payload = call(params)
+        except Exception as exc:  # the SDK raises its own type for a non-JSON body
+            if "exceeding access rate" in str(exc) or "Access denied" in str(exc):
+                raise AngelAuthError(
+                    "the historical endpoint is rate limiting this client, on "
+                    f"{params['fromdate']}..{params['todate']}. It answers with a "
+                    "plain body rather than a status, so the SDK reports it as a "
+                    "parse failure and this is the only place it can be read. Pace "
+                    "requests further apart - see HISTORY_MIN_INTERVAL - and do not "
+                    "retry: the block never says stop."
+                ) from exc
+            raise
         if not isinstance(payload, dict) or not payload.get("status", False):
             message = ""
             if isinstance(payload, dict):

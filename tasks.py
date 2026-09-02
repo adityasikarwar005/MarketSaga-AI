@@ -533,6 +533,33 @@ def _today():
     return date.today()
 
 
+def chart() -> None:
+    """Fetch a day's real option candles and bake them into the chart page.
+
+        python tasks.py chart                  today, NIFTY and BankNifty
+        python tasks.py chart --date 2026-09-02 --strikes 8
+
+    Two steps because they fail differently. The fetch talks to a throttled
+    vendor endpoint and caches every contract as it lands, so a block costs a
+    wait rather than the run; the bake is pure arithmetic over that cache and is
+    free to repeat. Running them separately is why a rate limit does not lose
+    an afternoon of downloads.
+    """
+    _load_dotenv()
+    rest = sys.argv[2:]
+    if "--date" not in rest:
+        rest += ["--date", _today().isoformat()]
+    if run(_py(), "jobs/option_history.py", *rest, check=False) != 0:
+        print("  the fetch did not finish. What it cached is still usable - re-run it.")
+    # `--strikes` decides how much to fetch and means nothing to the bake, which
+    # reads whatever the cache holds. Drop the flag and its value together.
+    bake = list(rest)
+    if "--strikes" in bake:
+        i = bake.index("--strikes")
+        bake = bake[:i] + bake[i + 2 :]
+    run(_py(), "jobs/chart_history.py", *bake, check=False)
+
+
 def _load_dotenv() -> None:
     """Read `.env` into this process, for the commands that need a credential.
 
@@ -573,6 +600,7 @@ COMMANDS = {
     "angel-history": angel_history,
     "angel-check": angel_check,
     "dashboard": dashboard,
+    "chart": chart,
     "status": status,
 }
 

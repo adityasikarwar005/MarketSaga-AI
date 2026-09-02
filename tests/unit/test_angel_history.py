@@ -131,7 +131,7 @@ class TestFetching:
             _session(),
             "key",
             token=26000,
-            exchange="NSE_CM",
+            exchange="NSE",
             interval=CandleInterval.ONE_MINUTE,
             start=START,
             end=START + timedelta(hours=6),
@@ -156,7 +156,7 @@ class TestFetching:
             _session(),
             "key",
             token=26000,
-            exchange="NSE_CM",
+            exchange="NSE",
             interval=CandleInterval.ONE_MINUTE,  # 30-day cap
             start=START,
             end=START + timedelta(days=95),
@@ -176,7 +176,7 @@ class TestFetching:
             _session(),
             "key",
             token=26000,
-            exchange="NSE_CM",
+            exchange="NSE",
             interval=CandleInterval.ONE_DAY,
             start=START,
             end=START,
@@ -196,7 +196,7 @@ class TestFetching:
             _session(),
             "key",
             token=26000,
-            exchange="NSE_CM",
+            exchange="NSE",
             interval=CandleInterval.ONE_MINUTE,
             start=START,
             end=START + timedelta(days=95),
@@ -215,7 +215,7 @@ class TestFetching:
             _session(),
             "key",
             token=1,
-            exchange="NSE_CM",
+            exchange="NSE",
             interval=CandleInterval.ONE_MINUTE,
             start=START,
             end=START + timedelta(hours=1),
@@ -230,7 +230,7 @@ class TestFetching:
             _session(),
             "key",
             token=1,
-            exchange="NSE_CM",
+            exchange="NSE",
             interval=CandleInterval.ONE_DAY,
             start=START,
             end=START,
@@ -245,7 +245,7 @@ class TestFetching:
                 _session(),
                 "key",
                 token=1,
-                exchange="NSE_CM",
+                exchange="NSE",
                 interval=CandleInterval.ONE_DAY,
                 start=START,
                 end=START,
@@ -261,7 +261,7 @@ class TestGuards:
                 _session(),
                 "key",
                 token=1,
-                exchange="NSE_CM",
+                exchange="NSE",
                 interval=CandleInterval.ONE_DAY,
                 start=START,
                 end=START - timedelta(days=1),
@@ -270,12 +270,39 @@ class TestGuards:
             )
 
     def test_an_unknown_exchange_is_refused(self) -> None:
+        """A completely unknown name."""
         with pytest.raises(KeyError, match="unknown exchange"):
             historical_candles(
                 _session(),
                 "key",
                 token=1,
                 exchange="NSE_XX",
+                interval=CandleInterval.ONE_DAY,
+                start=START,
+                end=START,
+                fetch=lambda _p: _ok([]),
+                min_interval=NO_PACING,
+            )
+
+    def test_the_websocket_vocabulary_is_refused_and_translated(self) -> None:
+        """The defect this guard exists for, rather than a typo.
+
+        `NSE_CM` and `NSE_FO` are real names - of the *websocket's* exchange
+        types - and `historical_candles` used to validate against that map and
+        then forward the name to a REST endpoint that has never heard of it.
+        The endpoint's answer is an empty body, which is byte for byte what its
+        throttle returns, so every historical call this repository made read as
+        "we are being rate limited" and none of them ever fetched a bar.
+
+        A name that is wrong must therefore not merely be refused: it has to say
+        which vocabulary it belongs to, or the next reader re-derives all of it.
+        """
+        with pytest.raises(KeyError, match="websocket's name"):
+            historical_candles(
+                _session(),
+                "key",
+                token=1,
+                exchange="NSE_FO",
                 interval=CandleInterval.ONE_DAY,
                 start=START,
                 end=START,
@@ -292,7 +319,7 @@ class TestGuards:
                 _session(),
                 "key",
                 token=1,
-                exchange="NSE_CM",
+                exchange="NSE",
                 interval=CandleInterval.ONE_DAY,
                 start=START,
                 end=START,
@@ -378,7 +405,7 @@ class TestPacing:
             _session(),
             "key",
             token=1,
-            exchange="NSE_CM",
+            exchange="NSE",
             interval=CandleInterval.ONE_MINUTE,  # 30-day cap
             start=START,
             end=START + timedelta(days=65),  # three windows
@@ -396,7 +423,7 @@ class TestPacing:
             _session(),
             "key",
             token=1,
-            exchange="NSE_CM",
+            exchange="NSE",
             interval=CandleInterval.ONE_MINUTE,
             start=START,
             end=START + timedelta(days=95),
