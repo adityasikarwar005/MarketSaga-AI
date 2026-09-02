@@ -3004,3 +3004,84 @@ magnitude larger than BankNifty's and grows with the horizon on both, which is
 what a method whose only mechanism is theta should do with six days to expiry
 against twenty-seven. The margins are still tiny and it is still one session,
 and the caveat about overlapping windows still applies to every `n` above.
+
+---
+
+# Addendum — neither of the previous two fixes was a fix, 2026-09-02
+
+Both defects from the chart rebuild were written up in the addendum above as
+fixed. Re-reading them against what the code actually did, neither was. In both
+cases the *symptom* was stopped and the reason it happened was left in place,
+which is the failure mode this file exists to catch and this time it caught
+itself one commit late.
+
+## The fetch: the retry was right and the loop still gave up
+
+Catching `ConnectTimeout` and backing off was the visible half. Two things were
+still wrong underneath it.
+
+**One backoff policy for two different problems.** The throttle and the network
+were given the same 20s → 120s ladder. They are not the same thing. A throttle
+is a budget that refills over tens of seconds, so retrying after two seconds
+spends the run re-earning the block; a dropped connection usually clears on the
+next attempt, so waiting twenty seconds for one spends four hundred contracts'
+worth of the run on nothing. Worse, a single shared attempt counter meant one
+network blip early in a run left the next throttle with fewer attempts than the
+policy claimed it had - a quiet reduction in resilience that nothing reports.
+
+Each kind now carries its own first wait, ceiling, attempt count and running
+delay.
+
+**`collect` still did `break`.** This is the one that matters. The whole point
+of the change was that contract 247 timing out must not end the run for
+contracts 248 through 454 - and the loop still ended the run for contracts 248
+through 454, just after retrying first. The retry made the failure less likely
+and left the consequence identical.
+
+A contract that exhausts its retries is now recorded and skipped, and the run
+continues. That cannot be unconditional, and it is not: five failures in a row
+stops it, because contract after contract failing is not bad luck with
+contracts, it is the session - an expired token, a dropped link, a venue that
+has stopped answering - and skipping past *that* is how a job reports success
+having fetched nothing. The counter resets on any success, so scattered failures
+do not trip the brake. The limit is a circuit breaker rather than a message
+pattern deliberately: matching on vendor error strings to decide what is fatal
+is a rule that goes stale silently, and this repository has already been caught
+by one vendor vocabulary change today.
+
+Failures go into the manifest, not only to stdout. A chain with a hole in it and
+a chain that never listed those strikes are indistinguishable from the page
+otherwise.
+
+## The page: the freeze was stopped, the reason it was expensive was not
+
+Taking the canvas out of the flex flow does break the resize cycle, and that
+part was right. But the cycle was only able to hang a tab because each turn of
+it was enormous: `onmousemove` called `draw()`, which repainted 375 candles, a
+volume lane, a forecast fan and two axes - twice, once per pane - to move a
+one-pixel crosshair. Removing the loop while leaving that in place means the
+next thing that redraws on a pointer event pays the same price.
+
+The crosshair is now its own canvas layered over the price canvas. The price
+layer is painted when the data or the box changes; pointer movement clears and
+repaints only the overlay, which is four lines and two labels.
+
+`window.resize` is gone as well, and it was the wrong event to begin with: a
+pane changes size when the ladder wraps or the window's zoom changes or a second
+pane appears, and only some of those resize the window. Each pane observes its
+own box with a `ResizeObserver` and remembers the last size it drew at, so a
+repaint that does not change the box cannot schedule another one. That closes
+the loop at the source rather than at the symptom, and the `fit()` guard becomes
+a second line of defence rather than the only one.
+
+## What to take from it
+
+The first fixes were written and verified the same way the real ones were: tests
+passed, the page loaded, the fetch completed. Nothing about being green said the
+cause was addressed, because the tests asserted the symptom was gone - a
+timeout no longer raised, the tab no longer hung - and the symptom was gone.
+The tests now assert the *behaviour that was actually wanted*: that the run
+continues past a dead contract, that five in a row stops it, that the network's
+wait is shorter than the throttle's, that an unrecognised error is raised
+without waiting at all. Reverting `continue` to `break` fails four of them by
+name, which the earlier tests would not have noticed.

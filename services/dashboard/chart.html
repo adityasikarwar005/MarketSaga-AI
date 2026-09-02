@@ -124,9 +124,13 @@ button { font:inherit; color:inherit; background:none; border:none; cursor:point
    intrinsic aspect ratio, so setting width/height to redraw at device pixel
    density changed the layout, which fired resize, which redrew. The page froze.
    Absolutely positioned inside a sized box, it cannot influence its own size. */
-.plot { position:relative; flex:1; min-height:0; }
-.plot canvas { position:absolute; inset:0; width:100%; height:100%; display:block;
-               cursor:crosshair; }
+.plot { position:relative; flex:1; min-height:0; cursor:crosshair; }
+.plot canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
+/* The crosshair is its own layer. Redrawing 375 candles on every mousemove was
+   both wasteful and the thing that made the resize cycle expensive enough to
+   hang; the price layer is now painted when the data or the box changes, and
+   pointer movement clears and repaints only this. */
+.plot canvas.over { pointer-events:none; }
 
 /* ---- footer ---------------------------------------------------------- */
 .foot {
@@ -192,7 +196,10 @@ dialog .close { margin-top:18px; color:var(--fore); font-size:12px; }
           <div class="ohlc" id="ceOhlc"></div>
           <span class="iv" id="ceIv"></span>
         </header>
-        <div class="plot"><canvas id="ceChart"></canvas></div>
+        <div class="plot" id="cePlot">
+          <canvas id="ceChart"></canvas>
+          <canvas id="ceOver" class="over"></canvas>
+        </div>
       </section>
       <section class="pane">
         <header>
@@ -201,7 +208,10 @@ dialog .close { margin-top:18px; color:var(--fore); font-size:12px; }
           <div class="ohlc" id="peOhlc"></div>
           <span class="iv" id="peIv"></span>
         </header>
-        <div class="plot"><canvas id="peChart"></canvas></div>
+        <div class="plot" id="pePlot">
+          <canvas id="peChart"></canvas>
+          <canvas id="peOver" class="over"></canvas>
+        </div>
       </section>
     </div>
   </div>
@@ -311,10 +321,11 @@ function fit(cv) {
   cv.getContext("2d").setTransform(r, 0, 0, r, 0, 0);
 }
 
-// Everything the crosshair needs, recomputed on each draw and stashed per canvas.
+// Everything the crosshair layer needs, recomputed when the price layer is
+// painted and stashed against the pane it belongs to.
 const frames = new WeakMap();
 
-function draw(cv, s, hover) {
+function draw(cv, s) {
   fit(cv);
   const ctx = cv.getContext("2d");
   const W = cv.clientWidth, H = cv.clientHeight;
@@ -442,32 +453,39 @@ function draw(cv, s, hover) {
   ctx.fillText(fmt(lastC, 1), W - PAD.r + 9, ly + 4);
 
   frames.set(cv, { rec, x, y, first, last, span, W, H, priceH, lo, hi });
-  if (hover !== undefined) crosshair(cv, hover);
 }
 
-function crosshair(cv, px) {
-  const f = frames.get(cv);
-  if (!f) return;
-  const ctx = cv.getContext("2d");
+function crosshair(price, over, px) {
+  // Draws on the overlay only. Nothing here touches the price layer, so moving
+  // the pointer costs a clear and a few lines rather than 375 candles.
+  fit(over);
+  const ctx = over.getContext("2d");
+  const f = frames.get(price);
+  ctx.clearRect(0, 0, over.clientWidth, over.clientHeight);
+  if (!f) return null;
+
   const m = Math.round(f.first + (px - PAD.l) / (f.W - PAD.l - PAD.r) * f.span);
   let bar = null, best = Infinity;
   for (const b of f.rec) { const d = Math.abs(b[0] - m); if (d < best) { best = d; bar = b; } }
-  if (!bar || best > 4) return;
+  if (!bar || best > 4) return null;
 
   const cx = Math.round(f.x(bar[0])) + 0.5;
-  ctx.save();
-  ctx.strokeStyle = "rgba(219,233,238,.22)"; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(cx, PAD.t); ctx.lineTo(cx, PAD.t + f.priceH); ctx.stroke();
   const yy = Math.round(f.y(bar[4])) + 0.5;
+  ctx.strokeStyle = "rgba(219,233,238,.26)"; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx, PAD.t); ctx.lineTo(cx, PAD.t + f.priceH); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(PAD.l, yy); ctx.lineTo(f.W - PAD.r, yy); ctx.stroke();
   ctx.setLineDash([]);
 
-  ctx.fillStyle = css("--raise");
+  ctx.fillStyle = css("--fore");
   ctx.fillRect(f.W - PAD.r + 3, yy - 9, PAD.r - 6, 18);
-  ctx.fillStyle = css("--text"); ctx.font = `11px ${css("--mono")}`;
+  ctx.fillStyle = "#0B1418"; ctx.font = `500 11px ${css("--mono")}`;
   ctx.fillText(fmt(bar[4], 1), f.W - PAD.r + 9, yy + 4);
-  ctx.restore();
   return bar;
+}
+
+function clearCross(over) {
+  fit(over);
+  over.getContext("2d").clearRect(0, 0, over.clientWidth, over.clientHeight);
 }
 
 function readout(el, bar) {
@@ -478,18 +496,32 @@ function readout(el, bar) {
     + `<span><em>Vol</em> ${bar[5].toLocaleString("en-IN")}</span>`;
 }
 
-function wire(cv, out) {
-  cv.onmousemove = e => {
-    const r = cv.getBoundingClientRect();
-    const s = seriesFor(cv.id === "ceChart" ? "CE" : "PE");
-    draw(cv, s);
-    readout($(out), crosshair(cv, e.clientX - r.left));
+function wire(right, plotId, priceId, overId, out) {
+  const plot = $(plotId), price = $(priceId), over = $(overId);
+  plot.onmousemove = e => {
+    const r = plot.getBoundingClientRect();
+    readout($(out), crosshair(price, over, e.clientX - r.left));
   };
-  cv.onmouseleave = () => {
-    const s = seriesFor(cv.id === "ceChart" ? "CE" : "PE");
-    draw(cv, s);
-    lastBar($(out), s);
+  plot.onmouseleave = () => {
+    clearCross(over);
+    lastBar($(out), seriesFor(right));
   };
+
+  // A ResizeObserver rather than window.resize: the pane changes size when the
+  // ladder wraps or a pane is added, neither of which resizes the window. The
+  // last size is remembered so a repaint that does not change the box cannot
+  // schedule another one - which is the loop that froze this page.
+  let last = "";
+  new ResizeObserver(entries => {
+    const { width, height } = entries[0].contentRect;
+    const key = `${Math.round(width)}x${Math.round(height)}`;
+    if (key === last) return;
+    last = key;
+    requestAnimationFrame(() => {
+      draw(price, seriesFor(right));
+      clearCross(over);
+    });
+  }).observe(plot);
 }
 
 function lastBar(el, s) {
@@ -501,15 +533,16 @@ function paint() {
   for (const b of $("rows").querySelectorAll(".row")) {
     b.setAttribute("aria-current", String(Number(b.dataset.k) === strike));
   }
-  for (const [right, name, cv, out, iv] of [
-    ["CE", "ceName", "ceChart", "ceOhlc", "ceIv"],
-    ["PE", "peName", "peChart", "peOhlc", "peIv"],
+  for (const [right, name, cv, over, out, iv] of [
+    ["CE", "ceName", "ceChart", "ceOver", "ceOhlc", "ceIv"],
+    ["PE", "peName", "peChart", "peOver", "peOhlc", "peIv"],
   ]) {
     const s = seriesFor(right);
     $(name).textContent = `${strike.toLocaleString("en-IN")} ${right}`;
     $(iv).textContent = s && s.iv !== null ? `implied vol ${(s.iv * 100).toFixed(1)}%`
       : s ? "implied vol not invertible" : "";
     draw($(cv), s);
+    clearCross($(over));
     lastBar($(out), s);
   }
 }
@@ -574,13 +607,12 @@ function init() {
       await show(u);
     };
   }
-  wire($("ceChart"), "ceOhlc");
-  wire($("peChart"), "peOhlc");
+  wire("CE", "cePlot", "ceChart", "ceOver", "ceOhlc");
+  wire("PE", "pePlot", "peChart", "peOver", "peOhlc");
   $("openScore").onclick = () => $("scoreBox").showModal();
   $("closeScore").onclick = () => $("scoreBox").close();
 
-  let t;
-  window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(paint, 120); });
+  // No window.resize handler: each pane observes its own box, above.
   show(meta);
 }
 init();
