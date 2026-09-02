@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     blocks = [chart_history.build(today, name, option_history.HISTORY_ROOT) for name in fetched]
-    chart_history.write(blocks, today, chart_history.OUT)
+    written = chart_history.write(blocks, today, chart_history.OUT_DIR)
     for b in blocks:
         bars = sum(len(s["recorded"]) for s in b["series"])
         _say(
@@ -151,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
             f"forward {b['forward']['close']:,.2f}. {b['score']['verdict']}",
             log,
         )
-    _say(f"charts written to {chart_history.OUT.relative_to(ROOT)}. Nothing published.", log)
+    names = ", ".join(w.name for w in written)
+    _say(f"written to services/dashboard: {names}. Nothing published.", log)
     return 0
 
 

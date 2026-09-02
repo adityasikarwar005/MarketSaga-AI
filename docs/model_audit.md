@@ -2916,3 +2916,91 @@ bars stay filled, the projection stays hollow, and the overlap is the point: a
 reader can see for themselves that on 2026-09-02 the 24000 CE was projected to
 sit near 103 at the close and printed 86.25 - inside the q10-q90 band, well under
 the median. A table saying "-2.50%" cannot show that.
+
+---
+
+# Addendum — the whole chain, and a page that froze itself, 2026-09-02
+
+The chart was rebuilt because it was rejected: eleven strikes behind a row of
+chips was not "every call and put", and the page around them was not worth
+looking at. Both parts are now different, and two things came out of the rebuild
+that are worth recording.
+
+## Four hundred and fifty contracts, and what the endpoint costs to ask
+
+The front expiry of both indices is 166 NIFTY contracts and 288 BankNifty ones.
+Fetched, they are 71,336 real one-minute bars. Two things about that run:
+
+* **A transient network error ended it at contract 247.** Not the throttle - a
+  plain `ConnectTimeout` on one request, which propagated out of the loop and
+  killed a run that had already spent half an hour on the wire. Nothing cached
+  was lost, because everything is written as it lands, but under the scheduler
+  that is a morning with no charts. `transient()` now classifies the throttle
+  and the network the same way and backs off for both. It classifies nothing
+  else: a retry loop that cannot tell a wrong token from a slow one turns a
+  clear failure into five silent minutes and then the same clear failure, and
+  there is a test that pins exactly that boundary.
+* **257 of 454 contracts have enough bars to chart.** The rest are far-wing
+  strikes with a handful of prints. They are listed in the ladder with their
+  last price and marked unchartable rather than dropped - somebody paid that
+  price, which is a fact about the day - but a candle every twenty minutes reads
+  as a quiet market rather than as an unlisted one, so they get no chart.
+
+The page is now two payloads and an index rather than one file. Both indices in
+one file is 2.5 MB, and a reader looking at NIFTY should not download BankNifty
+to do it. Bars ship as `[minute since the open, o, h, l, c, v]`; the key names
+were more than half the bytes, and the index is only meaningful against the open
+that the same payload carries - which is why the open ships with it and why
+there is a test that reads one against the wrong one.
+
+## The page froze itself, and the mechanism is worth knowing
+
+Clicking anything eventually hung the renderer - not slowly, completely, with
+Chrome unable to answer a screenshot request. The cause is a loop with no
+obvious loop in it:
+
+```
+canvas { flex:1; width:100% }        /* a flex item */
+fit(cv) { cv.width = clientWidth * dpr }   /* redraw at device pixel density */
+window.addEventListener("resize", paint)
+```
+
+Setting a canvas's `width`/`height` attributes changes its **intrinsic aspect
+ratio**, and a flex item's intrinsic ratio participates in layout. So the
+redraw resized the element, the resize fired `resize`, and `resize` redrew. Each
+step is ordinary and correct on its own; only the cycle is wrong, and nothing in
+any single line of it looks like a mistake.
+
+The fix is to take the canvas out of the flow entirely - `position:absolute;
+inset:0` inside a sized box - so it cannot influence its own size, plus a guard
+in `fit()` that skips the write when the pixel dimensions have not changed. The
+guard alone would not have been enough: the first resize after a real layout
+change still writes, and one write is all the cycle needs.
+
+Worth noting because it is the same shape as the defects this file is mostly
+about. Every component behaved correctly; the failure was in the composition,
+and the symptom - a frozen tab - pointed nowhere near the cause.
+
+## What the chain shows, now that all of it is there
+
+The projection was re-scored across every chartable contract rather than the
+eleven-strike band, which is a much better measurement than the first one:
+
+=========  ========  ========  ===========  ==============
+underlying horizon   n         model MAE    vs baseline
+=========  ========  ========  ===========  ==============
+NIFTY      5m        30,982    1.765        +0.24% worse
+NIFTY      15m       29,939    2.538        -0.08% better
+NIFTY      30m       28,542    3.378        -0.91% better
+NIFTY      60m       25,893    5.082        -2.19% better
+BANKNIFTY  5m        28,077    7.954        -0.03% better
+BANKNIFTY  15m       26,976    12.192       -0.07% better
+BANKNIFTY  30m       25,646    16.837       -0.13% better
+BANKNIFTY  60m       23,112    23.679       -0.25% better
+=========  ========  ========  ===========  ==============
+
+The shape survives seven times the contracts: NIFTY's edge is an order of
+magnitude larger than BankNifty's and grows with the horizon on both, which is
+what a method whose only mechanism is theta should do with six days to expiry
+against twenty-seven. The margins are still tiny and it is still one session,
+and the caveat about overlapping windows still applies to every `n` above.

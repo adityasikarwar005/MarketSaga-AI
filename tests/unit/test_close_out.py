@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -150,7 +151,12 @@ def test_one_underlying_failing_does_not_take_the_other_down(monkeypatch, wired)
         },
     )
     built: list[Any] = []
-    monkeypatch.setattr(close_out.chart_history, "write", lambda blocks, *a: built.extend(blocks))
+
+    def write(blocks, *a):
+        built.extend(blocks)
+        return [Path(f"chart_{b['name']}.js") for b in blocks]
+
+    monkeypatch.setattr(close_out.chart_history, "write", write)
 
     assert close_out.main(["--date", DAY.isoformat()]) == 0
     assert [b["name"] for b in built] == ["NIFTY"]
