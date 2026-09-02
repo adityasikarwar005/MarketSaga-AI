@@ -48,7 +48,6 @@ from libs.ms_core import dotenv  # noqa: E402
 from libs.ms_core.clock import RealClock  # noqa: E402
 from libs.ms_core.schemas import Candle  # noqa: E402
 from libs.ms_data.angelone import (  # noqa: E402
-    AngelAuthError,
     AngelCredentials,
     CandleInterval,
     ScripRow,
@@ -169,6 +168,29 @@ def fetch_series(
     return bars, True
 
 
+def transient(exc: BaseException) -> str | None:
+    """What kind of "try again" this is, or None if it is not one.
+
+    Two things interrupt a long fetch and neither is a reason to lose it. The
+    throttle is the expected one. The other is the network: a run of 454
+    contracts spends half an hour on the wire and a single `ConnectTimeout`
+    killed one at contract 247, discarding nothing already cached but ending the
+    run in a traceback - which under the scheduler is a morning with no charts.
+
+    Matched on the message and the exception's name rather than by importing the
+    vendor SDK's exception tree, which is not ours and has changed before.
+    Anything not recognised is re-raised untouched: waiting is the answer to
+    being told to wait, not a general-purpose way of handling errors.
+    """
+    text = str(exc).lower()
+    if "rate limiting" in text or "exceeding access rate" in text:
+        return "throttled"
+    name = type(exc).__name__.lower()
+    if "timeout" in name or "connection" in name or "timed out" in text:
+        return "network"
+    return None
+
+
 def fetch_with_backoff(
     session: Any,
     api_key: str,
@@ -178,23 +200,21 @@ def fetch_with_backoff(
     *,
     attempts: int = BACKOFF_ATTEMPTS,
 ) -> tuple[list[Candle], bool]:
-    """:func:`fetch_series`, waiting out the throttle rather than abandoning the run.
+    """:func:`fetch_series`, waiting out an interruption rather than abandoning the run.
 
     Backing off is only safe because the cache makes a retry idempotent: nothing
-    already on disk is re-requested, so a blocked run resumes where it stopped
-    instead of starting the whole band again and re-earning the block.
-
-    A non-throttle failure is re-raised untouched. Waiting is the response to
-    being told to wait, not a general-purpose way of handling errors.
+    already on disk is re-requested, so an interrupted run resumes where it
+    stopped instead of starting the whole band again and re-earning the block.
     """
     delay = BACKOFF_START
     for attempt in range(1, attempts + 1):
         try:
             return fetch_series(session, api_key, row, day, out_dir)
-        except AngelAuthError as exc:
-            if "rate limiting" not in str(exc) or attempt == attempts:
+        except Exception as exc:
+            kind = transient(exc)
+            if kind is None or attempt == attempts:
                 raise
-            print(f"    throttled on {row.symbol}; waiting {delay:.0f}s (attempt {attempt})")
+            print(f"    {kind} on {row.symbol}; waiting {delay:.0f}s (attempt {attempt})")
             time.sleep(delay)
             delay = min(delay * 2, BACKOFF_MAX)
     raise AssertionError("unreachable")
@@ -239,7 +259,11 @@ def collect(
             continue
         try:
             bars, did = fetch_with_backoff(session, api_key, row, day, out_dir)
-        except AngelAuthError as exc:
+        except Exception as exc:
+            # Whatever it was, the cache holds every contract fetched before it.
+            # Stopping here and reporting is better than a traceback: the
+            # manifest below still gets written, so the page can be built from
+            # the part of the chain that did arrive.
             print(f"  {name}: giving up on {row.symbol}, keeping what is cached - {exc}")
             break
         fetched += int(did)
