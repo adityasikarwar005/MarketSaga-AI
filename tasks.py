@@ -534,18 +534,15 @@ def _today():
 
 
 def _load_dotenv() -> None:
-    """Minimal .env loader - avoids a dependency for six lines of work."""
-    import os
+    """Read `.env` into this process, for the commands that need a credential.
 
-    env_file = ROOT / ".env"
-    if not env_file.exists():
-        return
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
+    The parsing moved to `libs.ms_core.dotenv` so the unattended runner shares
+    it rather than going without - see that module for the two trading days
+    that cost.
+    """
+    from libs.ms_core import dotenv
+
+    dotenv.load()
 
 
 COMMANDS = {

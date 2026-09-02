@@ -24,6 +24,12 @@ reconnecting inside the adapter, which is the real fix.
 **Short runs back off.** A recorder that dies immediately is failing to start,
 not dropping a socket, and restarting it at full speed against a broker turns
 one bad credential into a login flood.
+
+**It loads `.env` itself.** Every step below is a child process, and a child
+inherits this process's environment, not its imports. The scheduler hands us
+almost nothing - no `MARKETSAGE_ENV`, no `ANGEL_*` - so a runner that assumed
+someone had exported them recorded nothing on 2026-09-01 and 2026-09-02 while
+the credentials sat correct on disk.
 """
 
 from __future__ import annotations
@@ -40,6 +46,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from libs.ms_core import config as cfgmod  # noqa: E402
+from libs.ms_core import dotenv  # noqa: E402
+from libs.ms_core import env as envmod  # noqa: E402
 from libs.ms_core.clock import RealClock, SessionCalendar  # noqa: E402
 from libs.ms_data.holidays import HolidayStore  # noqa: E402
 
@@ -91,6 +99,18 @@ def main(argv: list[str] | None = None) -> int:
     clock = RealClock()
     today = args.date or clock.now().astimezone(IST).date()
     log = LOG_DIR / f"session_{today.isoformat()}.log"
+
+    # Before anything is spawned, because the spawned things are what need it.
+    # Logged rather than assumed: "environment is 'research'" in this line is
+    # the whole story on a morning that recorded nothing, and it is one line
+    # up from the plan instead of fifty seconds down inside the preflight.
+    loaded = dotenv.load()
+    try:
+        environment = envmod.current().value
+    except envmod.EnvironmentError_ as exc:
+        _say(f"REFUSING: {exc}", log)
+        return 2
+    _say(f"environment is {environment!r}, {len(loaded)} name(s) read from .env.", log)
 
     calendar = _calendar()
     try:

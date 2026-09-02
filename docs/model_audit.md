@@ -2676,3 +2676,89 @@ a third of a point. This is the book that eight years of bhavcopy cannot supply
 and that M70 established the archive could never settle - and it took one live
 morning to find two defects in the code that reads it, one of which had been
 quietly corrupting the differentiated feature group's headline number.
+
+---
+
+# Addendum — the unattended runner, 2026-09-02
+
+`jobs/trading_day.py` shipped on 2026-08-31 to satisfy "roz automatic hi 9:15 se
+3:30 tak market chale khud se". It has run twice, on 2026-09-01 and 2026-09-02,
+and has never recorded a single minute. Both mornings ended about fifty seconds
+after the Windows task fired.
+
+## The runner handed its children an environment it had not filled in
+
+`build/sessions/session_2026-09-02.log`:
+
+```
+  ok    scrip master downloaded, 140,452 instruments
+  FAIL  environment is 'research', which may not hold broker credentials.
+        Set MARKETSAGE_ENV=paper in .env.
+  preflight FAILED - see the log. Not starting the recorder.
+```
+
+`.env` said `MARKETSAGE_ENV=paper` on both mornings, and the four Angel fields
+were correct — the same file that a manual `python tasks.py record angel --chain`
+was reading successfully all through 2026-08-31.
+
+The loader lived in `tasks.py._load_dotenv`, called on the way into each command
+that needs a credential. `trading_day.py` spawns its steps *directly* —
+`[sys.executable, "jobs/angel_preflight.py"]`, not `tasks.py angel-check` —
+because they are jobs and it is a job. A child process inherits its parent's
+**environment**, not its parent's imports, and the Windows scheduler starts that
+parent from the stored user profile rather than from any shell where `.env` had
+ever been read. So the preflight resolved `env.current()`'s default, `research`,
+and `require_broker_credentials` refused precisely as M06 designed it to.
+
+Every component was correct. The environment gate did its job, the preflight
+reported the real reason in the right words, the runner declined to start a
+recorder that would fail, and the log said all of it. What was missing was the
+one line that puts `.env` into the process whose environment gets copied.
+
+**Why it was invisible.** The module was checked by reading it and by running
+`--dry-run` from an interactive shell — the single condition under which the
+defect cannot occur, because that shell already had the environment. `--dry-run`
+also returns before the preflight, so the only path that could have shown it was
+the one path never exercised. And the failure signal was real but passive: the
+scheduled task recorded `LastTaskResult: 1` and the log named the cause, on both
+days. Nothing was hidden. Nobody read it. That is the same shape as the
+pipeline-red-for-four-pushes note in CLAUDE.md, and the same shape as the
+secret scanner that had never run: a check that reports correctly into a place
+no one is looking is not yet a check.
+
+**The fix.** The parsing moved to `libs/ms_core/dotenv.py`, and
+`trading_day.main` calls it before anything is spawned, then logs which
+environment resulted:
+
+```
+2026-09-02 15:23:42 IST  environment is 'paper', 6 name(s) read from .env.
+```
+
+That line is deliberately above the plan rather than fifty seconds down inside a
+child's captured output. On a morning that records nothing it is the whole
+diagnosis, and its value is entirely in where it sits.
+
+Sharing the loader does not prevent the next caller from forgetting to call it.
+What it prevents is the two entry points drifting — one gaining `override`, or a
+different quoting rule — which is the version of this that stays wrong quietly.
+`tests/unit/test_unattended_env.py` asserts the handover on `os.environ`, since
+that is exactly what `subprocess.run` copies into a child; reverting the one line
+in `trading_day.main` fails it with the reason named.
+
+**What this does not fix.** Two things about these mornings are still open:
+
+1. The task is set for 09:05 but fired at 09:31 on 2026-09-02 and 12:07 on
+   2026-09-01, because `WakeToRun` is false and the machine was not on. The
+   recorder starts immediately when it finds itself past its start time, which
+   is right, but a 09:31 start has already missed the opening auction — the
+   fifteen minutes the whole schedule exists to capture.
+2. Nothing announces a failed morning. `LastTaskResult` and the session log both
+   carried it for two days.
+
+## What the two lost days actually cost
+
+Nothing irreplaceable in model terms — no gate depended on 2026-09-01 or
+2026-09-02, and no result is invalidated. What they cost is the claim. Before
+today the honest status of the daily recorder was "written, scheduled, and never
+observed to work", and it was being carried as done. One live session on
+2026-08-31, driven by hand, remains the only day this project has recorded.
