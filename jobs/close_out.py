@@ -15,6 +15,15 @@ session - every contract, every minute - so one run **after the close** produces
 the same charts as a recorder that ran all day. If the machine was asleep until
 the evening, this still gets the whole day. Nothing is lost by being late.
 
+**After the close is now the better time, not merely an acceptable one.** The
+default is every live expiry and every listed strike - 2450 contracts across the
+two indices - and each is its own request at about nine a minute, so a sweep
+takes four to five hours. Run during the session, a sweep that long reads the
+first rung at 10:00 and the last at 15:00 and the board is genuinely ragged.
+Run after 15:30, every contract returns the whole day and the raggedness is
+gone. The page reports the read window either way rather than pretending to an
+instant it never had.
+
 **It is not a replacement for the recorder**, and the difference matters. History
 returns last-traded candles; the recorder captures the chain with both sides of
 the book quoted at one instant, which is what a volatility surface may be fitted
@@ -41,7 +50,7 @@ from jobs import chart_history, option_history  # noqa: E402
 from libs.ms_core import config as cfgmod  # noqa: E402
 from libs.ms_core import dotenv  # noqa: E402
 from libs.ms_core import env as envmod  # noqa: E402
-from libs.ms_core.clock import RealClock, SessionCalendar  # noqa: E402
+from libs.ms_core.clock import Clock, RealClock, SessionCalendar  # noqa: E402
 from libs.ms_data.angelone import AngelCredentials, load_scrip_master, login  # noqa: E402
 from libs.ms_data.holidays import HolidayStore  # noqa: E402
 
@@ -49,7 +58,16 @@ IST = ZoneInfo("Asia/Kolkata")
 LOG_DIR = ROOT / "build" / "sessions"
 
 UNDERLYINGS = ("NIFTY", "BANKNIFTY")
-STRIKES_EACH_SIDE = 5
+
+# None means every listed strike and every live expiry, which is what the page
+# is now for. It is also what makes this job long: 1568 NIFTY contracts and 882
+# BankNifty ones are 2450 separate requests - the endpoint has no batch form -
+# and it answers about nine a minute under sustained load, so a full sweep runs
+# for four to five hours. Run after the close that is fine and is in fact the
+# better time: every contract then returns the whole session, so the board is
+# not ragged the way a sweep taken during trading hours necessarily is.
+STRIKES_EACH_SIDE: int | None = None
+EXPIRIES: int | None = None
 
 
 def _say(message: str, log: Path | None = None) -> None:
@@ -67,16 +85,36 @@ def _calendar() -> SessionCalendar:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, clock: Clock | None = None) -> int:
+    """``clock`` is injectable for the same reason everything else here is.
+
+    The test that this job warns about a session still running has to compare a
+    close against a now, and with the clock built in here the only now available
+    was the real one - so the test pinned a date, passed on the day it was
+    written, and began failing the next morning for a reason that had nothing to
+    do with the behaviour it was checking. A time-dependent test that goes red
+    on a calendar boundary teaches everyone to ignore it.
+    """
     p = argparse.ArgumentParser(description="Build a finished day's charts from history")
     p.add_argument("--date", type=date.fromisoformat, help="override today")
     p.add_argument("--dry-run", action="store_true", help="report the plan and stop")
-    p.add_argument("--strikes", type=int, default=STRIKES_EACH_SIDE)
+    p.add_argument(
+        "--strikes",
+        type=option_history.count_or_all,
+        default=STRIKES_EACH_SIDE,
+        help="each side of the money, or 'all' (default)",
+    )
+    p.add_argument(
+        "--expiries",
+        type=option_history.count_or_all,
+        default=EXPIRIES,
+        help="nearest N expiries, or 'all' (default)",
+    )
     p.add_argument("--underlying", nargs="*", default=list(UNDERLYINGS))
     args = p.parse_args(argv)
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    clock = RealClock()
+    clock = clock or RealClock()
     today = args.date or clock.now().astimezone(IST).date()
     log = LOG_DIR / f"closeout_{today.isoformat()}.log"
 
@@ -128,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
                 name,
                 today,
                 n_strikes=args.strikes,
+                n_expiries=args.expiries,
                 root=option_history.HISTORY_ROOT,
+                clock=clock,
             )
         except SystemExit as exc:
             # One underlying failing must not take the other down with it: a
@@ -142,17 +182,31 @@ def main(argv: list[str] | None = None) -> int:
         _say("nothing was fetched. Not rewriting the chart with an empty day.", log)
         return 1
 
-    blocks = [chart_history.build(today, name, option_history.HISTORY_ROOT) for name in fetched]
-    written = chart_history.write(blocks, today, chart_history.OUT_DIR)
-    for b in blocks:
-        bars = sum(len(s["recorded"]) for s in b["series"])
+    boards = {
+        name: chart_history.build(today, name, option_history.HISTORY_ROOT) for name in fetched
+    }
+    # Yesterday's expiries are not today's, and a leftover payload is a valid
+    # file defining a valid global that the page would load and date from its
+    # own contents.
+    for old in chart_history.OUT_DIR.glob("chart_*_*.js"):
+        old.unlink()
+    written = chart_history.write(boards, today, chart_history.OUT_DIR)
+    for name, group in boards.items():
+        bars = sum(len(s["recorded"]) for b in group for s in b["series"])
+        charted = sum(len(b["series"]) for b in group)
+        traded = sum(len(b["chain"]) for b in group)
         _say(
-            f"{b['name']}: {len(b['series'])} contracts, {bars:,} real bars, "
-            f"forward {b['forward']['close']:,.2f}. {b['score']['verdict']}",
+            f"{name}: {traded} contracts traded across {len(group)} expiries, "
+            f"{charted} chartable, {bars:,} real bars.",
             log,
         )
-    names = ", ".join(w.name for w in written)
-    _say(f"written to services/dashboard: {names}. Nothing published.", log)
+        for b in group:
+            _say(f"  {b['expiry']}: {b['score']['verdict']}", log)
+    _say(
+        f"written to services/dashboard: {len(written)} files "
+        f"({written[0].name} plus one per expiry). Nothing published.",
+        log,
+    )
     return 0
 
 

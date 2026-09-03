@@ -2,124 +2,530 @@
  *
  * `recorded` happened: real one-minute candles from Angel's historical
  * endpoint, packed as [minute since the open, o, h, l, c, v]. `projected` did
- * not happen. They are separate arrays on purpose - merged, a projection
- * becomes indistinguishable from history the moment somebody scrolls. Each
- * underlying carries the score its own projection earned on its own day.
+ * not happen: it is packed the same way, as [minute since the open, o, h, l,
+ * c, q25, q75], where the high and low are the 90th and 10th percentile of a
+ * distribution rather than a range anything traded in. They are separate arrays on purpose - merged, a
+ * projection becomes indistinguishable from history the moment somebody
+ * scrolls. Each expiry carries the score its own projection earned on its own
+ * day, because six days to expiry and three years to expiry are not the same
+ * question.
  */
 window.CHART_INDEX = {
-  "day": "2026-09-02",
+  "day": "2026-09-03",
   "underlyings": [
     {
       "name": "NIFTY",
-      "file": "chart_NIFTY.js",
-      "global": "CHART_NIFTY",
-      "forward": {
-        "symbol": "NIFTY29SEP26FUT",
-        "close": 24004.3,
-        "bars": 376
-      },
-      "expiry": "2026-09-08",
-      "atm": 24000.0,
-      "step": 50.0,
       "open": "09:15",
-      "as_of": "15:30",
-      "strikes": 83,
-      "contracts": 131,
-      "charted": 121,
-      "score": {
-        "method": "each contract's own implied volatility against the same-minute future, forward diffused driftless, repriced in closed form",
-        "baseline": "the contract's price now, unchanged",
-        "measured_on": "2026-09-02",
-        "horizons": [
-          {
-            "minutes": 5,
-            "n": 30982,
-            "model_mae": 1.765,
-            "baseline_mae": 1.7608,
-            "delta_pct": 0.24
+      "as_of": "16:16",
+      "read_from": "11:32",
+      "contracts": 711,
+      "charted": 511,
+      "listed": 1354,
+      "expiries": [
+        {
+          "expiry": "2026-09-08",
+          "file": "chart_NIFTY_20260908.js",
+          "global": "CHART_NIFTY_20260908",
+          "forward": {
+            "token": 68407,
+            "symbol": "NIFTY29SEP26FUT",
+            "expiry": "2026-09-29",
+            "close": 24088.0,
+            "bars": 137,
+            "basis": "bracketing"
           },
-          {
-            "minutes": 15,
-            "n": 29939,
-            "model_mae": 2.5375,
-            "baseline_mae": 2.5396,
-            "delta_pct": -0.08
-          },
-          {
-            "minutes": 30,
-            "n": 28542,
-            "model_mae": 3.3785,
-            "baseline_mae": 3.4096,
-            "delta_pct": -0.91
-          },
-          {
-            "minutes": 60,
-            "n": 25893,
-            "model_mae": 5.0818,
-            "baseline_mae": 5.1954,
-            "delta_pct": -2.19
+          "atm": 24100.0,
+          "step": 50.0,
+          "as_of": "11:43",
+          "read_from": "11:32",
+          "listed": 172,
+          "strikes": 86,
+          "contracts": 130,
+          "charted": 120,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [
+              {
+                "minutes": 5,
+                "n": 12536,
+                "model_mae": 1.9694,
+                "baseline_mae": 1.9662,
+                "delta_pct": 0.17
+              },
+              {
+                "minutes": 15,
+                "n": 11583,
+                "model_mae": 4.3671,
+                "baseline_mae": 4.362,
+                "delta_pct": 0.12
+              },
+              {
+                "minutes": 30,
+                "n": 10138,
+                "model_mae": 6.3684,
+                "baseline_mae": 6.3731,
+                "delta_pct": -0.07
+              },
+              {
+                "minutes": 60,
+                "n": 7319,
+                "model_mae": 10.4834,
+                "baseline_mae": 10.5248,
+                "delta_pct": -0.39
+              }
+            ],
+            "verdict": "beat the baseline at 30m, 60m by up to 0.4%, lost at 5m, 15m by 0.2% - margins this small on one day are not a result yet",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
           }
-        ],
-        "verdict": "beat the baseline at 15m, 30m, 60m by up to 2.2%, lost at 5m by 0.2% - margins this small on one day are not a result yet",
-        "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
-        "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
-      }
-    },
-    {
-      "name": "BANKNIFTY",
-      "file": "chart_BANKNIFTY.js",
-      "global": "CHART_BANKNIFTY",
-      "forward": {
-        "symbol": "BANKNIFTY29SEP26FUT",
-        "close": 57496.0,
-        "bars": 375
-      },
-      "expiry": "2026-09-29",
-      "atm": 57500.0,
-      "step": 100.0,
-      "open": "09:15",
-      "as_of": "15:30",
-      "strikes": 99,
-      "contracts": 161,
-      "charted": 136,
-      "score": {
-        "method": "each contract's own implied volatility against the same-minute future, forward diffused driftless, repriced in closed form",
-        "baseline": "the contract's price now, unchanged",
-        "measured_on": "2026-09-02",
-        "horizons": [
-          {
-            "minutes": 5,
-            "n": 28077,
-            "model_mae": 7.9537,
-            "baseline_mae": 7.9559,
-            "delta_pct": -0.03
+        },
+        {
+          "expiry": "2026-09-15",
+          "file": "chart_NIFTY_20260915.js",
+          "global": "CHART_NIFTY_20260915",
+          "forward": {
+            "token": 68407,
+            "symbol": "NIFTY29SEP26FUT",
+            "expiry": "2026-09-29",
+            "close": 24088.0,
+            "bars": 137,
+            "basis": "bracketing"
           },
-          {
-            "minutes": 15,
-            "n": 26976,
-            "model_mae": 12.1919,
-            "baseline_mae": 12.2004,
-            "delta_pct": -0.07
-          },
-          {
-            "minutes": 30,
-            "n": 25646,
-            "model_mae": 16.8368,
-            "baseline_mae": 16.8589,
-            "delta_pct": -0.13
-          },
-          {
-            "minutes": 60,
-            "n": 23112,
-            "model_mae": 23.6792,
-            "baseline_mae": 23.7378,
-            "delta_pct": -0.25
+          "atm": 24100.0,
+          "step": 50.0,
+          "as_of": "11:55",
+          "read_from": "11:44",
+          "listed": 164,
+          "strikes": 80,
+          "contracts": 123,
+          "charted": 93,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [
+              {
+                "minutes": 5,
+                "n": 8908,
+                "model_mae": 2.3699,
+                "baseline_mae": 2.3694,
+                "delta_pct": 0.02
+              },
+              {
+                "minutes": 15,
+                "n": 8194,
+                "model_mae": 4.957,
+                "baseline_mae": 4.9535,
+                "delta_pct": 0.07
+              },
+              {
+                "minutes": 30,
+                "n": 7270,
+                "model_mae": 7.4912,
+                "baseline_mae": 7.4818,
+                "delta_pct": 0.13
+              },
+              {
+                "minutes": 60,
+                "n": 5468,
+                "model_mae": 10.7062,
+                "baseline_mae": 10.6598,
+                "delta_pct": 0.44
+              }
+            ],
+            "verdict": "lost to the baseline at every horizon, by 0.4% to 0.0%",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
           }
-        ],
-        "verdict": "beat the baseline at every horizon, by 0.0% to 0.2%",
-        "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
-        "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
-      }
+        },
+        {
+          "expiry": "2026-09-22",
+          "file": "chart_NIFTY_20260922.js",
+          "global": "CHART_NIFTY_20260922",
+          "forward": {
+            "token": 68407,
+            "symbol": "NIFTY29SEP26FUT",
+            "expiry": "2026-09-29",
+            "close": 24088.0,
+            "bars": 137,
+            "basis": "bracketing"
+          },
+          "atm": 24100.0,
+          "step": 50.0,
+          "as_of": "12:04",
+          "read_from": "11:56",
+          "listed": 160,
+          "strikes": 50,
+          "contracts": 69,
+          "charted": 49,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [
+              {
+                "minutes": 5,
+                "n": 2561,
+                "model_mae": 3.0338,
+                "baseline_mae": 3.0315,
+                "delta_pct": 0.08
+              },
+              {
+                "minutes": 15,
+                "n": 2323,
+                "model_mae": 6.1513,
+                "baseline_mae": 6.1503,
+                "delta_pct": 0.02
+              },
+              {
+                "minutes": 30,
+                "n": 2030,
+                "model_mae": 8.9363,
+                "baseline_mae": 8.9288,
+                "delta_pct": 0.08
+              },
+              {
+                "minutes": 60,
+                "n": 1524,
+                "model_mae": 12.055,
+                "baseline_mae": 12.0718,
+                "delta_pct": -0.14
+              }
+            ],
+            "verdict": "beat the baseline at 60m by up to 0.1%, lost at 5m, 15m, 30m by 0.1% - margins this small on one day are not a result yet",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
+          }
+        },
+        {
+          "expiry": "2026-09-29",
+          "file": "chart_NIFTY_20260929.js",
+          "global": "CHART_NIFTY_20260929",
+          "forward": {
+            "token": 68407,
+            "symbol": "NIFTY29SEP26FUT",
+            "expiry": "2026-09-29",
+            "close": 24088.0,
+            "bars": 137,
+            "basis": "same-cycle"
+          },
+          "atm": 24100.0,
+          "step": 50.0,
+          "as_of": "12:23",
+          "read_from": "12:04",
+          "listed": 246,
+          "strikes": 106,
+          "contracts": 159,
+          "charted": 115,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [
+              {
+                "minutes": 5,
+                "n": 10421,
+                "model_mae": 2.7597,
+                "baseline_mae": 2.7581,
+                "delta_pct": 0.06
+              },
+              {
+                "minutes": 15,
+                "n": 9562,
+                "model_mae": 5.7115,
+                "baseline_mae": 5.7073,
+                "delta_pct": 0.07
+              },
+              {
+                "minutes": 30,
+                "n": 8543,
+                "model_mae": 8.3795,
+                "baseline_mae": 8.3785,
+                "delta_pct": 0.01
+              },
+              {
+                "minutes": 60,
+                "n": 6658,
+                "model_mae": 10.7848,
+                "baseline_mae": 10.7597,
+                "delta_pct": 0.23
+              }
+            ],
+            "verdict": "lost to the baseline at every horizon, by 0.2% to 0.0%",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
+          }
+        },
+        {
+          "expiry": "2026-10-06",
+          "file": "chart_NIFTY_20261006.js",
+          "global": "CHART_NIFTY_20261006",
+          "forward": {
+            "token": 48704,
+            "symbol": "NIFTY27OCT26FUT",
+            "expiry": "2026-10-27",
+            "close": 24180.0,
+            "bars": 128,
+            "basis": "bracketing"
+          },
+          "atm": 24100.0,
+          "step": 50.0,
+          "as_of": "12:33",
+          "read_from": "12:23",
+          "listed": 148,
+          "strikes": 13,
+          "contracts": 17,
+          "charted": 4,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [
+              {
+                "minutes": 5,
+                "n": 43,
+                "model_mae": 4.3589,
+                "baseline_mae": 4.3384,
+                "delta_pct": 0.47
+              },
+              {
+                "minutes": 15,
+                "n": 49,
+                "model_mae": 8.6701,
+                "baseline_mae": 8.7092,
+                "delta_pct": -0.45
+              },
+              {
+                "minutes": 30,
+                "n": 33,
+                "model_mae": 12.5449,
+                "baseline_mae": 12.5697,
+                "delta_pct": -0.2
+              },
+              {
+                "minutes": 60,
+                "n": 31,
+                "model_mae": 10.5119,
+                "baseline_mae": 10.6532,
+                "delta_pct": -1.33
+              }
+            ],
+            "verdict": "beat the baseline at 15m, 30m, 60m by up to 1.3%, lost at 5m by 0.5% - margins this small on one day are not a result yet",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
+          }
+        },
+        {
+          "expiry": "2026-10-27",
+          "file": "chart_NIFTY_20261027.js",
+          "global": "CHART_NIFTY_20261027",
+          "forward": {
+            "token": 48704,
+            "symbol": "NIFTY27OCT26FUT",
+            "expiry": "2026-10-27",
+            "close": 24180.0,
+            "bars": 128,
+            "basis": "same-cycle"
+          },
+          "atm": 24100.0,
+          "step": 50.0,
+          "as_of": "12:47",
+          "read_from": "12:34",
+          "listed": 204,
+          "strikes": 69,
+          "contracts": 101,
+          "charted": 71,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [
+              {
+                "minutes": 5,
+                "n": 4350,
+                "model_mae": 2.7562,
+                "baseline_mae": 2.7552,
+                "delta_pct": 0.03
+              },
+              {
+                "minutes": 15,
+                "n": 3902,
+                "model_mae": 5.8055,
+                "baseline_mae": 5.8052,
+                "delta_pct": 0.01
+              },
+              {
+                "minutes": 30,
+                "n": 3428,
+                "model_mae": 8.7521,
+                "baseline_mae": 8.7583,
+                "delta_pct": -0.07
+              },
+              {
+                "minutes": 60,
+                "n": 2830,
+                "model_mae": 10.1128,
+                "baseline_mae": 10.1475,
+                "delta_pct": -0.34
+              }
+            ],
+            "verdict": "beat the baseline at 30m, 60m by up to 0.3%, lost at 5m, 15m by 0.0% - margins this small on one day are not a result yet",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
+          }
+        },
+        {
+          "expiry": "2026-11-23",
+          "file": "chart_NIFTY_20261123.js",
+          "global": "CHART_NIFTY_20261123",
+          "forward": {
+            "token": 61471,
+            "symbol": "NIFTY23NOV26FUT",
+            "expiry": "2026-11-23",
+            "close": 24290.0,
+            "bars": 112,
+            "basis": "same-cycle"
+          },
+          "atm": 24100.0,
+          "step": 50.0,
+          "as_of": "12:55",
+          "read_from": "12:47",
+          "listed": 160,
+          "strikes": 33,
+          "contracts": 54,
+          "charted": 28,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [
+              {
+                "minutes": 5,
+                "n": 1041,
+                "model_mae": 2.8485,
+                "baseline_mae": 2.8468,
+                "delta_pct": 0.06
+              },
+              {
+                "minutes": 15,
+                "n": 961,
+                "model_mae": 5.7809,
+                "baseline_mae": 5.7772,
+                "delta_pct": 0.06
+              },
+              {
+                "minutes": 30,
+                "n": 830,
+                "model_mae": 8.7309,
+                "baseline_mae": 8.7217,
+                "delta_pct": 0.11
+              },
+              {
+                "minutes": 60,
+                "n": 697,
+                "model_mae": 11.1265,
+                "baseline_mae": 11.0978,
+                "delta_pct": 0.26
+              }
+            ],
+            "verdict": "lost to the baseline at every horizon, by 0.3% to 0.1%",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
+          }
+        },
+        {
+          "expiry": "2026-12-29",
+          "file": "chart_NIFTY_20261229.js",
+          "global": "CHART_NIFTY_20261229",
+          "forward": {
+            "token": 61471,
+            "symbol": "NIFTY23NOV26FUT",
+            "expiry": "2026-11-23",
+            "close": 24290.0,
+            "bars": 112,
+            "basis": "carried"
+          },
+          "atm": 24000.0,
+          "step": 1000.0,
+          "as_of": "12:57",
+          "read_from": "12:55",
+          "listed": 49,
+          "strikes": 24,
+          "contracts": 38,
+          "charted": 21,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [],
+            "verdict": "not projected - no listed future expires on or after this expiry, so its forward would have to be extrapolated years past the last one",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
+          }
+        },
+        {
+          "expiry": "2027-03-30",
+          "file": "chart_NIFTY_20270330.js",
+          "global": "CHART_NIFTY_20270330",
+          "forward": {
+            "token": 61471,
+            "symbol": "NIFTY23NOV26FUT",
+            "expiry": "2026-11-23",
+            "close": 24290.0,
+            "bars": 112,
+            "basis": "carried"
+          },
+          "atm": 24000.0,
+          "step": 1500.0,
+          "as_of": "16:15",
+          "read_from": "12:57",
+          "listed": 25,
+          "strikes": 10,
+          "contracts": 15,
+          "charted": 9,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [],
+            "verdict": "not projected - no listed future expires on or after this expiry, so its forward would have to be extrapolated years past the last one",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
+          }
+        },
+        {
+          "expiry": "2027-06-29",
+          "file": "chart_NIFTY_20270629.js",
+          "global": "CHART_NIFTY_20270629",
+          "forward": {
+            "token": 61471,
+            "symbol": "NIFTY23NOV26FUT",
+            "expiry": "2026-11-23",
+            "close": 24290.0,
+            "bars": 112,
+            "basis": "carried"
+          },
+          "atm": 24000.0,
+          "step": 1500.0,
+          "as_of": "16:16",
+          "read_from": "16:15",
+          "listed": 26,
+          "strikes": 4,
+          "contracts": 5,
+          "charted": 1,
+          "score": {
+            "method": "each contract's own implied volatility against the same-minute future discounted to this expiry, forward diffused driftless, repriced in closed form",
+            "baseline": "the contract's price now, unchanged",
+            "measured_on": "2026-09-03",
+            "horizons": [],
+            "verdict": "not projected - no listed future expires on or after this expiry, so its forward would have to be extrapolated years past the last one",
+            "caveat": "one session, and the observations overlap: consecutive forecasts on the same contract share almost all of their outcome, so n is not an independent sample size and a small margin is not a finding",
+            "point_estimate": "the median, not the mean - MAE is minimised by the median, and under a driftless forward the two differ by the Ito term"
+          }
+        }
+      ]
     }
   ]
 };

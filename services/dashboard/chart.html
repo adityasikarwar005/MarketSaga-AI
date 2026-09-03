@@ -160,6 +160,36 @@ td { text-align:right; padding:2px 18px 2px 0; color:var(--dim); }
 td.win { color:var(--up); } td.lose { color:var(--down); }
 dialog .close { margin-top:18px; color:var(--fore); font-size:12px; }
 
+/* The expiry rail. The chain stays the spine of this page - this is the other
+   axis it is read on, and it is a rail rather than a dropdown because NIFTY
+   lists eighteen expiries and which ones are crowded is itself information:
+   four weeklies in a row, then months, then a long tail nobody trades. A
+   dropdown would have hidden that behind a click. */
+.rail {
+  display:flex; gap:6px; overflow-x:auto; padding:8px 18px;
+  border-bottom:1px solid var(--rule); background:var(--raise);
+  scrollbar-width:thin;
+}
+.rail button {
+  flex:0 0 auto; display:flex; flex-direction:column; gap:1px; align-items:flex-start;
+  padding:6px 11px; border-radius:7px; border:1px solid transparent;
+  background:transparent; color:var(--faint); cursor:pointer; line-height:1.25;
+  font:inherit; text-align:left;
+}
+.rail button b { font-size:12px; font-weight:600; color:var(--text); letter-spacing:.01em; }
+.rail button i { font-style:normal; font-size:10.5px; font-family:var(--mono); }
+.rail button:hover { background:var(--sink); }
+.rail button[aria-selected="true"] {
+  border-color:var(--rule); background:var(--sink); color:var(--text);
+}
+.rail button[aria-selected="true"] b { color:var(--fore); }
+/* An expiry with no future behind it gets candles and no forecast. Marked on
+   the rail rather than only in the footer, so the absence is visible before
+   the payload is opened rather than after. */
+.rail button.nofc b::after {
+  content:"·"; margin-left:5px; color:var(--faint); font-weight:400;
+}
+
 @media (max-width:900px) {
   .body { flex-direction:column; }
   .chain { width:auto; max-height:36vh; border-right:none; border-bottom:1px solid var(--rule); }
@@ -176,11 +206,14 @@ dialog .close { margin-top:18px; color:var(--fore); font-size:12px; }
     <div class="switch" id="switch"></div>
     <div class="readout">
       <div><b id="fwd">—</b><i id="fwdName">forward</i></div>
-      <div><b id="expiry">—</b><i>expiry</i></div>
+      <div><b id="expiry">—</b><i id="dte">expiry</i></div>
+      <div><b id="count">—</b><i id="listed">contracts</i></div>
       <div><b id="day">—</b><i id="asOf">session</i></div>
     </div>
     <nav class="nav"><a href="index.html">Overview</a><a href="desk.html">Desk</a></nav>
   </div>
+
+  <div class="rail" id="rail" role="tablist" aria-label="Expiry"></div>
 
   <div class="body">
     <section class="chain">
@@ -244,7 +277,12 @@ const $ = id => document.getElementById(id);
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (n, d = 2) => n.toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
 
-let meta = IDX.underlyings[0];
+// Two selections, not one. `under` is the index; `meta` is one of its expiries
+// and is what everything on the page is actually about - its own money, its own
+// strike grid, its own forward and its own score. Keeping the expiry in a
+// variable called `meta` is deliberate: it is the unit this page draws.
+let under = IDX.underlyings[0];
+let meta = under.expiries[0];
 let data = null;          // the loaded payload for `meta`
 let strike = meta.atm;
 const loaded = {};
@@ -257,15 +295,47 @@ function clock(min, openHHMM) {
   return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
 }
 
-function load(u) {
-  if (loaded[u.name]) return Promise.resolve(loaded[u.name]);
+// One payload per expiry, fetched when that expiry is opened and kept after.
+// The index knows every rung of every expiry - counts, money, grid, score - so
+// the rail and the header are right before anything is downloaded; what arrives
+// on demand is the candles, which are all of the weight.
+function load(e) {
+  if (loaded[e.global]) return Promise.resolve(loaded[e.global]);
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = u.file;
-    s.onload = () => { loaded[u.name] = window[u.global]; resolve(loaded[u.name]); };
-    s.onerror = () => reject(new Error(`${u.file} did not load`));
+    s.src = e.file;
+    s.onload = () => {
+      if (!window[e.global]) { reject(new Error(`${e.file} defined no ${e.global}`)); return; }
+      loaded[e.global] = window[e.global];
+      resolve(loaded[e.global]);
+    };
+    s.onerror = () => reject(new Error(`${e.file} did not load`));
     document.head.appendChild(s);
   });
+}
+
+const DAY_MS = 86400000;
+const shortDate = iso => new Date(iso + "T00:00:00").toLocaleDateString("en-IN",
+  { day: "numeric", month: "short" });
+const daysTo = iso =>
+  Math.round((new Date(iso + "T00:00:00") - new Date(IDX.day + "T00:00:00")) / DAY_MS);
+
+/* ---- the expiry rail ------------------------------------------------- */
+function drawRail() {
+  $("rail").innerHTML = under.expiries.map((e, i) => {
+    const dte = daysTo(e.expiry);
+    const cold = e.forward.basis === "carried" ? " nofc" : "";
+    return `<button role="tab" class="${cold.trim()}" data-i="${i}"
+      aria-selected="${e.expiry === meta.expiry}"
+      title="${e.contracts} of ${e.listed} listed contracts traded; ${e.charted} have enough bars to chart${
+        cold ? "; no listed future expires this late, so no forecast is drawn" : ""}">
+      <b>${shortDate(e.expiry)}</b><i>${dte}d · ${e.contracts}</i></button>`;
+  }).join("");
+  for (const b of $("rail").querySelectorAll("button")) {
+    b.onclick = () => openExpiry(under.expiries[Number(b.dataset.i)]);
+  }
+  const on = $("rail").querySelector('[aria-selected="true"]');
+  if (on) on.scrollIntoView({ inline: "center", block: "nearest" });
 }
 
 /* ---- the ladder ------------------------------------------------------ */
@@ -282,9 +352,15 @@ function drawLadder() {
   const rows = ladder();
   $("strikeCount").textContent = `${rows.length} strikes`;
   $("rows").innerHTML = rows.map(r => {
+    // Each rung carries the minute it was read. The board is swept one
+    // contract at a time at the endpoint's own pace, so two rungs are hours
+    // apart on a bad day and the ladder should be able to say so when asked.
     const cell = (c, side) => c
-      ? `<span class="${side}${c.chartable ? "" : " no"}">${fmt(c.last)}</span>`
-      : `<span class="${side} no">–</span>`;
+      ? `<span class="${side}${c.chartable ? "" : " no"}" title="${
+          c.bars} bars, last printed ${c.last_print}, read ${c.read_at || "—"}${
+          c.chartable ? "" : "; too thin to chart"}"
+        >${fmt(c.last)}</span>`
+      : `<span class="${side} no" title="listed, no prints today">–</span>`;
     // A call is in the money below the forward, a put above it.
     const ceItm = r.strike < meta.forward.close ? " itm" : "";
     const peItm = r.strike > meta.forward.close ? " itm" : "";
@@ -349,7 +425,7 @@ function draw(cv, s) {
 
   let lo = Infinity, hi = -Infinity, vMax = 0;
   for (const b of rec) { if (b[3] < lo) lo = b[3]; if (b[2] > hi) hi = b[2]; if (b[5] > vMax) vMax = b[5]; }
-  for (const p of proj) { if (p.l < lo) lo = p.l; if (p.h > hi) hi = p.h; }
+  for (const p of proj) { if (p[3] < lo) lo = p[3]; if (p[2] > hi) hi = p[2]; }
   const range = (hi - lo) || 1;
   const pad = range * 0.06;
   lo -= pad; hi += pad;
@@ -370,12 +446,12 @@ function draw(cv, s) {
 
   // The forecast sits behind the record, as a band it cannot be mistaken for.
   if (proj.length) {
-    const x0 = x(proj[0].m) - bw;
+    const x0 = x(proj[0][0]) - bw;
     ctx.fillStyle = css("--fore-soft");
     ctx.beginPath();
-    ctx.moveTo(x(proj[0].m), y(proj[0].h));
-    for (const p of proj) ctx.lineTo(x(p.m), y(p.h));
-    for (let i = proj.length - 1; i >= 0; i--) ctx.lineTo(x(proj[i].m), y(proj[i].l));
+    ctx.moveTo(x(proj[0][0]), y(proj[0][2]));
+    for (const p of proj) ctx.lineTo(x(p[0]), y(p[2]));
+    for (let i = proj.length - 1; i >= 0; i--) ctx.lineTo(x(proj[i][0]), y(proj[i][3]));
     ctx.closePath(); ctx.fill();
 
     ctx.strokeStyle = "rgba(142,123,245,.45)";
@@ -409,24 +485,34 @@ function draw(cv, s) {
   // What was claimed: hollow, dashed, and wider than a minute bar so the two
   // are never one glance apart. Body is the interquartile range, because a
   // driftless forward's open and close are the same number to two decimals.
-  const pw = Math.max(9, bw * 3.2);
+  // A bar a minute now, not eight coarsening steps, so these are the width of
+  // a candle rather than three of them. Every third is drawn as a box; the rest
+  // carry the band and the median line, because sixty dashed boxes in an hour
+  // is a hatch pattern rather than a set of bars.
+  const pw = Math.max(3, bw * 1.15);
+  const anchorM = proj.length ? proj[0][0] : 0;
   for (const p of proj) {
-    const cx = Math.round(x(p.m)) + 0.5;
-    ctx.strokeStyle = css("--fore"); ctx.lineWidth = 1.2;
+    const cx = Math.round(x(p[0])) + 0.5;
+    ctx.strokeStyle = css("--fore"); ctx.lineWidth = 1;
     ctx.setLineDash([3, 2]);
-    ctx.beginPath(); ctx.moveTo(cx, y(p.h)); ctx.lineTo(cx, y(p.l)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, y(p[2])); ctx.lineTo(cx, y(p[3])); ctx.stroke();
     ctx.setLineDash([]);
     // Filled, but at a quarter opacity and in a colour no traded price uses.
     // A dashed outline alone came out as a bare vertical line at these widths -
     // legibility and honesty are not in tension here, the colour carries it.
-    const top = y(p.q75), h = Math.max(4, y(p.q25) - top);
+    const top = y(p[6]), h = Math.max(2, y(p[5]) - top);
     ctx.fillStyle = "rgba(142,123,245,.26)";
     ctx.fillRect(cx - pw / 2, top, pw, h);
-    ctx.setLineDash([3, 2]);
-    ctx.strokeRect(cx - pw / 2, top, pw, h);
-    ctx.setLineDash([]);
-    ctx.lineWidth = 1.8;
-    ctx.beginPath(); ctx.moveTo(cx - pw / 2, y(p.c)); ctx.lineTo(cx + pw / 2, y(p.c)); ctx.stroke();
+    if ((p[0] - anchorM) % 5 === 0) {
+      ctx.strokeStyle = css("--fore");
+      ctx.setLineDash([3, 2]);
+      ctx.strokeRect(cx - pw / 2, top, pw, h);
+      ctx.setLineDash([]);
+    }
+    ctx.strokeStyle = css("--fore"); ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(cx - pw / 2, y(p[4])); ctx.lineTo(cx + pw / 2, y(p[4]));
+    ctx.stroke();
   }
 
   // Time axis.
@@ -548,22 +634,54 @@ function paint() {
 }
 
 function header() {
-  $("fwd").textContent = fmt(meta.forward.close);
-  $("fwdName").textContent = meta.forward.symbol;
-  $("expiry").textContent = new Date(meta.expiry).toLocaleDateString("en-IN",
+  const fwd = meta.forward;
+  $("fwd").textContent = fwd.close === null ? "—" : fmt(fwd.close);
+  $("fwdName").textContent = fwd.basis === "same-cycle"
+    ? fwd.symbol
+    : `${fwd.symbol} (${fwd.basis})`;
+  $("expiry").textContent = shortDate(meta.expiry);
+  const dte = daysTo(meta.expiry);
+  $("dte").textContent = dte === 0 ? "expires today" : `${dte}d to expiry`;
+
+  $("count").textContent = meta.contracts.toLocaleString("en-IN");
+  $("listed").textContent = `of ${meta.listed} listed traded · ${meta.charted} charted`;
+
+  $("day").textContent = new Date(IDX.day + "T00:00:00").toLocaleDateString("en-IN",
     { day: "numeric", month: "short" });
-  $("day").textContent = new Date(IDX.day).toLocaleDateString("en-IN",
-    { day: "numeric", month: "short" });
-  $("asOf").textContent = `real candles to ${meta.as_of}`;
+  // A window, not an instant. Every contract is its own request, so a board of
+  // this size is read over hours and a single "as of" would be a claim about
+  // rungs it was never true for.
+  $("asOf").textContent = meta.read_from && meta.read_from !== meta.as_of
+    ? `swept ${meta.read_from}–${meta.as_of}`
+    : `read at ${meta.as_of || "—"}`;
 
   const sc = meta.score;
-  $("verdict").innerHTML = `Forecast <b>${sc.verdict.split(" - ")[0]}</b>`;
+  const drawn = sc.horizons.length > 0;
+  $("verdict").innerHTML = drawn
+    ? `Forecast <b>${sc.verdict.split(" - ")[0]}</b>`
+    : `<b>No forecast on this expiry</b> — ${sc.verdict.replace(/^not projected - /, "")}`;
+  $("openScore").hidden = !drawn;
+  if (!drawn) return;
+
+  // Whether the forecast was anchored inside the session or at its live edge is
+  // the difference between a claim a reader can check on this page and one they
+  // cannot. It used to be asserted; it is now read off the data.
+  const live = data && data.series.length
+    ? data.series[0].anchor === clock(
+        data.series[0].recorded[data.series[0].recorded.length - 1][0], data.open)
+    : false;
   $("scoreText").textContent =
     `Each contract's implied volatility is inverted from its own price against the future's `
-    + `price from the same minute, then the forward is diffused without drift — so the only `
-    + `thing genuinely forecast is time decay. The session is over, so the forecast is anchored `
-    + `inside it and drawn over the hour that actually followed. Measured against `
-    + `"${sc.baseline}" over every minute of ${sc.measured_on}:`;
+    + `price from the same minute — discounted to this expiry, since the future rarely shares `
+    + `it — then the forward is diffused without drift, so the only thing genuinely forecast `
+    + `is time decay. `
+    + (live
+        ? `The session is still running, so the forecast starts at the last minute recorded and `
+          + `nothing has happened yet to check it against. `
+        : `The session is over, so the forecast is anchored inside it and drawn over the hour `
+          + `that actually followed. `)
+    + `Measured against "${sc.baseline}" over every minute of ${sc.measured_on}, on this `
+    + `expiry alone:`;
   $("scoreTable").innerHTML =
     "<tr><th>Horizon</th><th>n</th><th>Forecast MAE</th><th>Baseline MAE</th><th>Better by</th></tr>"
     + sc.horizons.map(h => {
@@ -575,23 +693,23 @@ function header() {
   $("scoreCaveat").textContent = sc.caveat.charAt(0).toUpperCase() + sc.caveat.slice(1) + ".";
 }
 
-async function show(u) {
-  meta = u;
-  data = await load(u);
-  // The projected bars carry a clock time; the recorded ones carry an index.
-  // Give the projection an index too, once, rather than parsing in the draw loop.
-  const [oh, om] = data.open.split(":").map(Number);
-  for (const s of data.series) {
-    for (const p of s.projected) {
-      const [h, m] = p.t.split(":").map(Number);
-      p.m = h * 60 + m - oh * 60 - om;
-    }
-  }
-  if (!data.series.some(s => s.strike === strike)) strike = meta.atm;
+async function openExpiry(e) {
+  meta = e;
+  drawRail();
+  data = await load(e);
+  // No conversion pass over the series any more: the projection ships on the
+  // same minute-since-open axis the recorded bars use.
+  if (!data.chain.some(c => c.strike === strike)) strike = meta.atm;
   header();
   drawLadder();
   paint();
   scrollToCurrent();
+}
+
+async function showUnderlying(u) {
+  under = u;
+  strike = u.expiries[0].atm;
+  await openExpiry(u.expiries[0]);
 }
 
 function init() {
@@ -602,9 +720,7 @@ function init() {
       for (const o of $("switch").querySelectorAll("button")) {
         o.setAttribute("aria-pressed", String(o === b));
       }
-      const u = IDX.underlyings[Number(b.dataset.i)];
-      strike = u.atm;
-      await show(u);
+      await showUnderlying(IDX.underlyings[Number(b.dataset.i)]);
     };
   }
   wire("CE", "cePlot", "ceChart", "ceOver", "ceOhlc");
@@ -613,7 +729,7 @@ function init() {
   $("closeScore").onclick = () => $("scoreBox").close();
 
   // No window.resize handler: each pane observes its own box, above.
-  show(meta);
+  showUnderlying(under);
 }
 init();
 </script>
