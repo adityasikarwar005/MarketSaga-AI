@@ -227,11 +227,35 @@ class TestWrite:
         """
         stale = tmp_path / "chart_NIFTY_20260901.js"
         stale.write_text("window.CHART_NIFTY_20260901 = {};", encoding="utf-8")
-        for p in tmp_path.glob("chart_*_*.js"):
-            p.unlink()
         write(self._boards(), DAY, tmp_path)
-        assert not stale.exists()
+
+        assert (
+            not stale.exists()
+        ), "`write` left an expiry behind that today's board does not contain"
         assert (tmp_path / "chart_index.js").exists(), "the index is not an expiry file"
+        assert (
+            tmp_path / "chart_NIFTY_20260908.js"
+        ).exists(), "the sweep took today's payloads with it"
+
+    def test_the_clearing_belongs_to_write_not_to_its_callers(self, tmp_path: Path) -> None:
+        """Where a destructive step lives decides what a stub can reach.
+
+        `close_out` used to clear the output directory itself and then call
+        `write`. Its own tests stub `write` - correctly; they are about which
+        underlyings get built - and stubbing `write` does not stub the `unlink`
+        loop standing beside it. So every run of the suite deleted the real
+        published dashboard's payloads. Nothing failed and nothing noticed until
+        a deploy check refused to upload an index naming files that were gone.
+        """
+        import inspect
+
+        from jobs import close_out
+
+        assert "unlink" not in inspect.getsource(close_out), (
+            "close_out deletes files again; a caller-side delete beside a "
+            "stubbable write is how the published page lost its candles"
+        )
+        assert "unlink" in inspect.getsource(write)
 
 
 class TestChainVsSeries:
