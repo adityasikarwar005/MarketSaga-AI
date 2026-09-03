@@ -3274,3 +3274,36 @@ thing that wastes an hour:
   machine is cp1252. Node writes UTF-8. The en dash came back as three characters and
   the assertion failed on a string that was correct at both ends — a decoding fault in
   the harness, reported as a defect in the page.
+
+## Two things the first full sweep taught, both about time
+
+The sweep of every live contract ran for the first time on 2026-09-03 and turned up
+two more of the same shape — no error, no wrong number, a day quietly worth less than
+it should have been.
+
+**Three close-outs ran at once.** The scheduled task started at 15:53 and again at
+15:59, and a third was started by hand. Three processes then made the same 2450
+requests against an endpoint that rate limits, into one cache directory, writing one
+`manifest.json` between them. Nothing failed. They raced, spent three times the
+requests on one day's data, and whichever finished last decided what the manifest
+said. `close_out.py` now takes an OS file lock and refuses to start while one is held.
+An OS lock rather than a pid file on purpose: a four-hour job gets killed sometimes,
+and a pid file left behind refuses tomorrow's run for a reason that stopped being
+true. The kernel releases this one however the process ends.
+
+**A partial day became a finished one at 15:30.** This is the better find. The cache
+skips anything already fetched, which is what makes a 2450-contract sweep resumable,
+and the staleness rule asked *"is the session over now?"* — so a file written at 11:32
+holding two hours of bars was treated as final the moment the bell rang, and never
+asked for again. A board swept during trading hours would have kept whatever fragment
+it caught, permanently, and looked exactly like a market that went quiet at 11:32.
+
+The question is not whether the session is over now. It is **whether the session was
+over when the file was written**. A file written after its own close is final and
+never re-read. A file written during the session it describes is partial by
+construction: while that session runs it goes stale on age, and once the session
+closes it is stale unconditionally — the day it holds two hours of now has six and a
+quarter, and the session ending is precisely what makes the rest available.
+
+Two things that look like the same question, one letter of difference in the code, and
+the wrong one leaves every intraday sweep permanently half-read.
