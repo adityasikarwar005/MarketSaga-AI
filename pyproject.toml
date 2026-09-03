@@ -95,7 +95,22 @@ markers = [
     "slow: takes more than a few seconds",
     "manual: requires human judgement, not run in CI",
 ]
-filterwarnings = ["error::DeprecationWarning"]
+# A DeprecationWarning is an error, because the ones that matter here are our
+# own and a warning nobody reads is a warning that becomes a break later.
+#
+# The exception is narrow on purpose: it names one alias, in a chain of imports
+# none of which is ours. `fastapi.testclient` imports `starlette.testclient`,
+# which still annotates against `anyio.abc.BlockingPortal`, which anyio has
+# deprecated in favour of `anyio.from_thread.BlockingPortal`. Nothing in this
+# repository can stop that import, and turning it into an error stopped the
+# whole integration file from being *collected* - so the API tests did not fail,
+# they silently did not run, and CI reported a collection error two libraries
+# deep. Pinning anyio to silence a warning about starlette's annotations would
+# be worse: it freezes a transitive dependency for a line of code we do not own.
+filterwarnings = [
+    "error::DeprecationWarning",
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100
