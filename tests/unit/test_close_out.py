@@ -102,13 +102,44 @@ def test_an_environment_that_cannot_hold_a_credential_stops_it(monkeypatch, wire
     assert "REFUSING" in _log(wired)
 
 
+class _At:
+    """A clock stopped at one instant. See close_out.main's docstring.
+
+    This used to be the real one, and the test therefore asserted something
+    about the day it was written on rather than about the job. It passed on
+    2026-09-02 and failed on 2026-09-03, having caught nothing in between.
+    """
+
+    def __init__(self, when: datetime) -> None:
+        self._when = when
+
+    def now(self) -> datetime:
+        return self._when
+
+
 def test_a_session_still_running_is_called_out(monkeypatch, wired):
     """A partial day charts fine. Filed silently as the day, it is a lie."""
     monkeypatch.setattr(close_out, "_calendar", lambda: _Calendar(closed_hour=23))
-    assert close_out.main(["--date", DAY.isoformat(), "--dry-run"]) == 0
+    midday = datetime(DAY.year, DAY.month, DAY.day, 12, 0, tzinfo=IST)
+    assert close_out.main(["--date", DAY.isoformat(), "--dry-run"], clock=_At(midday)) == 0
     log = _log(wired)
     assert "still open" in log
+    assert "690 more minutes" in log, "the warning did not say how much of the day was missing"
     assert "the day so far, not the day" in log
+
+
+def test_a_finished_session_is_not_called_out(monkeypatch, wired):
+    """The other half of the same guard, which nothing asserted before.
+
+    A warning that fires on every run is a warning nobody reads, and this one is
+    the difference between "this is the day" and "this is the day so far".
+    """
+    monkeypatch.setattr(close_out, "_calendar", lambda: _Calendar(closed_hour=15))
+    evening = datetime(DAY.year, DAY.month, DAY.day, 20, 0, tzinfo=IST)
+    assert close_out.main(["--date", DAY.isoformat(), "--dry-run"], clock=_At(evening)) == 0
+    log = _log(wired)
+    assert "still open" not in log
+    assert "the day so far, not the day" not in log
 
 
 def test_a_failed_fetch_does_not_overwrite_the_page(monkeypatch, wired):
@@ -140,26 +171,36 @@ def test_one_underlying_failing_does_not_take_the_other_down(monkeypatch, wired)
         return {"underlying": name}
 
     monkeypatch.setattr(close_out.option_history, "collect", collect)
+    # `build` returns one board per expiry now, and `write` takes them keyed by
+    # underlying - the page is split per expiry rather than per underlying.
     monkeypatch.setattr(
         close_out.chart_history,
         "build",
-        lambda day, name, root: {
-            "name": name,
-            "series": [{"recorded": [1, 2, 3]}],
-            "forward": {"close": 24000.0},
-            "score": {"verdict": "did not beat anything"},
-        },
+        lambda day, name, root: [
+            {
+                "name": name,
+                "expiry": "2026-09-08",
+                "chain": [{"strike": 1.0, "right": "CE"}],
+                "series": [{"recorded": [1, 2, 3]}],
+                "forward": {"close": 24000.0},
+                "score": {"verdict": "did not beat anything"},
+            }
+        ],
     )
-    built: list[Any] = []
+    built: dict[str, Any] = {}
 
-    def write(blocks, *a):
-        built.extend(blocks)
-        return [Path(f"chart_{b['name']}.js") for b in blocks]
+    def write(boards, *a):
+        built.update(boards)
+        return [
+            Path(f"chart_{name}_{b['expiry'].replace('-', '')}.js")
+            for name, group in boards.items()
+            for b in group
+        ]
 
     monkeypatch.setattr(close_out.chart_history, "write", write)
 
     assert close_out.main(["--date", DAY.isoformat()]) == 0
-    assert [b["name"] for b in built] == ["NIFTY"]
+    assert list(built) == ["NIFTY"]
     assert "BANKNIFTY" in _log(wired)
 
 

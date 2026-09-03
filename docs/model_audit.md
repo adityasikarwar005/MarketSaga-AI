@@ -3085,3 +3085,192 @@ continues past a dead contract, that five in a row stops it, that the network's
 wait is shorter than the throttle's, that an unrecognised error is raised
 without waiting at all. Reverting `continue` to `break` fails four of them by
 name, which the earlier tests would not have noticed.
+
+---
+
+# 2026-09-03 — every live contract, and the four things that stood between
+
+The ladder was built for one expiry. "Every call and put" is not one expiry: NIFTY
+lists **1568** live contracts across **18** expiries out to June 2031, and BankNifty
+another 882 across six. The front weekly is 172 of the 1568. So the page's spine was
+right and its scope was about a ninth of what it claimed.
+
+Widening it is mostly mechanical — group by expiry, split the payload, add a rail.
+What was not mechanical is that a 2450-contract sweep is 2450 separate requests, and
+at that length four things which were harmless at 454 stopped being harmless. Three
+of them produce no error at all.
+
+## 1. A vendor call with no bound on it — fourteen and a half minutes, silently
+
+This is the one worth reading. Mid-run, with successful calls taking 1.2 to 2.1
+seconds, one `getCandleData` blocked from **10:42:29 to 10:57:03** — 874 seconds —
+and then ended with `ConnectionResetError(10054)`. It raised nothing and logged
+nothing while it did it. The only visible symptom was a gap in the log with no line
+in it, which is indistinguishable from a slow endpoint.
+
+The SDK is not obviously at fault: it *does* pass `timeout=7` to `requests`. But
+`requests` bounds the time between bytes on a connection it already has. It does not
+bound name resolution, and the SDK calls the module-level `requests.request` rather
+than its own session, so every call builds a fresh connection and re-enters that path.
+
+Arithmetic is what makes this a defect rather than a nuisance. One hang per forty
+contracts, over 2450 contracts, is **fourteen hours** of a job sitting still and then
+reporting success. Nothing downstream can tell that apart from a quiet venue.
+
+**Fix.** `_history_fetcher` runs the vendor call on a thread and gives it
+`HISTORY_CALL_DEADLINE` (20s — ten times a normal call, well under the shortest hang
+seen) to answer. Past that the call is abandoned and a `HistoryCallTimeout` is
+raised. It cannot be killed, so it is left to finish into a result box a late writer
+can fill harmlessly. `HistoryCallTimeout` subclasses `TimeoutError` and its name
+contains "timeout", so `transient()` already classifies it as `network` and the run
+retries rather than counting it toward the stop-the-session brake — which is asserted,
+because a deadline that raises something the retry does not recognise converts a
+fourteen-minute stall into an immediate hard failure and, five of those later, into a
+stopped run.
+
+## 2. The throttle was modelled wrong, and the model was in the backoff
+
+The previous policy waited 20s on the first throttle, doubling to 120s, on the stated
+belief that "a throttle is a budget that refills over tens of seconds". That belief
+had never been measured. Measuring it:
+
+| sleep between requests | successes / 25 | wall time |
+|---|---|---|
+| 0.0s | 11 | 43s |
+| 0.4s | 16 | 44s |
+| 0.8s | 14 | 56s |
+| 1.2s | 12 | 66s |
+
+**Pacing does not move it.** Standing four times further back bought nothing and cost
+half again as much wall time. This is not a refilling budget; it is a per-request
+rejection that clears immediately. And at a ~50% rejection rate, a 20-second first
+wait is 20 seconds *per contract*: 1568 contracts is nine hours of deliberate waiting
+to collect the same rejections that a 0.5-second retry collects in two.
+
+**Fix.** `throttled` becomes `(0.5, 8.0, 12)` — quick, many attempts, a low ceiling
+on purpose, since the whole finding is that standing back does not help and therefore
+standing back further cannot help more. `network` keeps the growing wait, because a
+dropped connection genuinely is the other kind of problem. The two policies are now
+the opposite way round from how they started, which is the sort of thing a test should
+be able to state: `test_the_throttle_is_asked_again_promptly_not_waited_out` pins the
+measurement where the next person to reason "throttled means wait longer" will meet it.
+
+Sustained, the endpoint delivers about **nine contracts a minute** regardless. That is
+the real ceiling and no policy beats it; a full sweep of both indices is four to five
+hours. Which is why `close_out.py` now says, in its docstring, that after the close is
+the *better* time to run rather than merely an acceptable one — a sweep that long
+taken during trading hours reads the first rung at 10:00 and the last at 15:00.
+
+## 3. The cache had no notion of a day that is still being written
+
+Everything fetched is cached and never re-fetched. That is what makes an interrupted
+sweep resumable, and for a finished day it is unconditionally correct — the bars
+cannot change. Applied to a live session it freezes the board at whatever minute the
+first run happened to reach each contract, and **a board frozen at 10:47 looks exactly
+like a market that stopped trading at 10:47.**
+
+`_stale` now re-asks for a contract when the day is today, the close has not passed,
+and the file is older than five minutes. The check is on the file's mtime, not on the
+last bar in it, and that is the load-bearing part: a contract that has not printed
+since 09:20 and a file last written at 09:20 hold *identical bars*. One is a stale
+read and the other is a quiet strike, and nothing in the series can tell them apart.
+
+## 4. The forward came from whichever future was nearest, and usually that is the wrong one
+
+Options list weekly; futures list monthly. So the 8 September weekly was being priced
+against the 29 September future — twenty-one days of carry, about **90 index points**
+on 24000, which is nearly two strike rungs at the money. All of it lands in the
+implied volatility, in a direction that reads as skew.
+
+Each expiry now takes the nearest future expiring on or after it, discounted back to
+its own expiry at the risk-free rate. That removes the carry. It does not remove the
+dividends, which is why it is only ever used to pull a forward *backwards*.
+
+The direction it refuses matters more. NIFTY lists options to 2031 and futures three
+months out, so most expiries have **no future behind them at all**. Extending November
+2026 out to June 2029 would be three years of assumed dividends dressed as a traded
+price, and the resulting band would look exactly like the ones drawn on real forwards.
+Those expiries are marked `carried`, get their ladder and their real candles, and get
+no projection and no score. The rail marks them before the payload is even opened.
+
+## And one the rewrite would have introduced
+
+The projection went from eight coarsening steps (5, 10, 15 … 45, 60) to a bar a
+minute. `_anchor` decides where a forecast starts, and on a finished day it must move
+back an hour so the projection lands on top of the hour that actually followed — the
+only arrangement in which a reader can check it. Its test for "is the session over"
+was *"does the shortest step land before the close"*.
+
+At five minutes, a last bar of 15:29 gives 15:34, which is after the close: correct.
+At one minute it gives 15:30, which is not — so every projection on every finished day
+would have anchored itself at the closing bell, forecasting a market that is shut,
+checkable by nobody, and setting the whole chart's vertical scale with an hour of
+diffusion into nothing. Two ordinary correct lines, and changing one broke the other.
+
+It is now tested as the question it actually is — is the session over — with the 15:29
+case named, and with the opposite error named too: at 15:00 on a live day the full
+hour does not fit before the close either, and dragging the anchor back an hour there
+would be just as wrong.
+
+## What the sweep says, and what it does not
+
+The board is genuinely **ragged** when swept during a session, and the page says so
+rather than pretending to an instant: each rung carries the minute it was read, and
+the header shows a window (`rungs read 11:02–13:41`) instead of a single "as of". A
+post-close sweep has no raggedness, because every contract then returns the whole day.
+
+`option_history.py` now checkpoints its manifest after each expiry rather than at the
+end. A five-hour job whose only output is its last line has no output; expiries are
+swept nearest-first and money-outward, so the manifest describes everything anybody is
+actually trading long before the tail of 2029 comes off the wire.
+
+## What to take from it
+
+Three of these four produce no error, no wrong number, and no failing test. The hang
+is a gap in a log. The backoff is a job that is merely slow. The stale cache is a
+market that looks quiet. The wrong forward is a volatility that looks like skew. Each
+one is only visible if you measure the thing you already believe you know — the pace
+the throttle wants, the time a call takes, what a cached file's age means. The
+measurement table above cost four minutes and inverted the policy it was testing.
+
+## The page had no test at all, and the first one it got found a defect
+
+Everything above is Python, and the Python is well covered. The page is the other
+half of the same feature and nothing exercised it — the two defects it has had were
+both found by opening it in a browser, which nothing in CI does. That gap has a
+specific shape: **a page that cannot read its payload does not error.** It draws the
+ladder from the index, requests the candles, and leaves the pane empty next to a
+ladder that looks complete. One failed request in a console nobody has open.
+
+`tests/js/render_check.mjs` stubs the smallest browser `chart.html` will accept —
+enough DOM that `init()` runs, a no-op canvas — loads payloads the packer actually
+wrote, runs the page's own script, opens a second expiry through the rail, and
+reports what it drew. `tests/unit/test_chart_page.py` asserts against that and skips
+where node is absent. It is not a rendering test. It is the only thing that spans the
+two languages this feature is written in, where the contract is a set of field names.
+
+It found one on its first run. The header read `rungs read 09:15–11:43` on a sweep
+that began at 11:32. The chain rows carried `as_of`, taken from each contract's last
+bar, and the header took the earliest of them as "when the sweep started". But the
+earliest last-bar on any board is a far wing that printed once at 09:16 and stayed
+quiet all day — which says nothing whatever about when it was read. Two different
+facts had one field name, and the sentence built from them was false in a way that
+looked entirely plausible.
+
+They are now two fields. `last_print` is when the contract last traded, which belongs
+on the rung. `read_at` is when the sweep reached it, taken from the cached file's
+mtime and frozen into the manifest at fetch time, which is what the header's window
+is built from. The tooltip on a rung shows both.
+
+Two smaller things the harness cost, worth writing down because both are the sort of
+thing that wastes an hour:
+
+* The stub's `querySelectorAll` re-parsed the element's HTML on every call, so it
+  handed back fresh objects each time. The page sets `innerHTML`, queries the result,
+  and assigns `onclick` to what comes back — onto throwaways. The page looked like it
+  had rendered and did nothing. Children are now parsed once, when `innerHTML` is
+  written, and kept.
+* `subprocess.run(..., text=True)` decodes with the *locale* encoding, which on this
+  machine is cp1252. Node writes UTF-8. The en dash came back as three characters and
+  the assertion failed on a string that was correct at both ends — a decoding fault in
+  the harness, reported as a defect in the page.

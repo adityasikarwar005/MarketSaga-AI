@@ -1112,13 +1112,76 @@ class CandleInterval(StrEnum):
         }[self.value]
 
 
-def _history_fetcher(session: AngelSession, api_key: str) -> Callable[[dict[str, str]], Any]:
-    """Bind a SmartConnect to this session for historical calls."""
+class HistoryCallTimeout(TimeoutError):
+    """One historical request outstayed its deadline and was abandoned."""
+
+
+# The vendor SDK does pass a timeout to `requests` - it defaults to 7 seconds -
+# and it is not enough to rely on. Measured on 2026-09-03, in the middle of a
+# run whose successful calls were taking 1.2 to 2.1 seconds: one getCandleData
+# call blocked for **14 minutes and 34 seconds** before Windows gave up on the
+# socket with ECONNRESET. `requests` only bounds the time between bytes on a
+# connection it has; it does not bound name resolution, and the SDK builds a
+# fresh connection for every call, so every request re-enters that path.
+#
+# The shape of the failure is what makes it worth a guard rather than a note. It
+# does not raise, it does not log, and it does not corrupt anything: it just
+# stops. At one hang per forty contracts a 2450-contract run spends fourteen
+# hours doing nothing, reports success, and looks from the outside like a slow
+# endpoint. A deadline is the only thing that turns it back into an error.
+#
+# Twenty seconds is roughly ten times the normal call and well under the
+# shortest hang observed, so it cannot fire on a call that was going to return.
+HISTORY_CALL_DEADLINE = 20.0
+
+
+def _history_fetcher(
+    session: AngelSession,
+    api_key: str,
+    *,
+    deadline: float = HISTORY_CALL_DEADLINE,
+) -> Callable[[dict[str, str]], Any]:
+    """Bind a SmartConnect to this session for historical calls, under a deadline.
+
+    The client is built once rather than per call. The SDK's constructor creates
+    an SSL context, makes a log directory and re-points a logging file handler
+    every time it runs, and none of that is per-request work. The access token is
+    still re-applied on each call, so a rotated session still propagates.
+
+    The deadline is enforced here, on a thread, because there is nowhere else it
+    can be: the call that hangs is the vendor's, and it hangs below the level
+    where its own timeout applies. An abandoned thread is left to finish on its
+    own - it cannot be killed, and it will end when the operating system gives
+    up on the socket - which is why the result is passed back through a box that
+    a late writer can fill harmlessly rather than through the caller's frame.
+    """
+    client = _smartconnect(api_key)
 
     def fetch(params: dict[str, str]) -> Any:  # pragma: no cover - needs the vendor package
-        client = _smartconnect(api_key)
         client.setAccessToken(session.jwt_token)
-        return client.getCandleData(params)
+        box: dict[str, Any] = {}
+
+        def run() -> None:
+            try:
+                box["ok"] = client.getCandleData(params)
+            except BaseException as exc:
+                box["err"] = exc
+
+        worker = threading.Thread(target=run, daemon=True, name="angel-history")
+        worker.start()
+        worker.join(deadline)
+        if worker.is_alive():
+            raise HistoryCallTimeout(
+                f"the historical endpoint did not answer within {deadline:g}s for "
+                f"token {params.get('symboltoken')} over {params.get('fromdate')}.."
+                f"{params.get('todate')}. The vendor SDK's own timeout does not "
+                "bound this call; see HISTORY_CALL_DEADLINE. The request is "
+                "abandoned rather than waited on - retrying is cheap and the "
+                "observed hang was fourteen minutes."
+            )
+        if "err" in box:
+            raise box["err"]
+        return box.get("ok")
 
     return fetch
 

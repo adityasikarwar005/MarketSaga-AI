@@ -65,3 +65,14 @@ data/.kite_session.json
 !data/reference/daily/
 data/reference/daily/*
 !data/reference/daily/*.json
+
+# The chain payloads, one per expiry. Derived data: jobs/chart_history.py
+# rebuilds them from the cache in data/raw/history, which is itself ignored.
+#
+# They used to be committed, when the page was one file per underlying and the
+# pair came to 2.5 MB. Splitting per expiry makes that eighteen files for NIFTY
+# alone and about 20 MB for a full session - every day, forever, in history, for
+# a file that is regenerated the next morning. chart_index.js stays tracked: it
+# is 3 KB, it carries each expiry's score, and it is the record of what a day's
+# board actually held.
+services/dashboard/chart_*_*.js

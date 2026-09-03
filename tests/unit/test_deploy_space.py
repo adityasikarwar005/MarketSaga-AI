@@ -74,3 +74,68 @@ def test_nothing_held_back_is_also_published():
 @pytest.mark.parametrize("name", PUBLISHED)
 def test_every_allowlisted_file_exists(name: str):
     assert (SPACE_DIR / name).is_file(), f"{name} is on the allowlist and not in the directory"
+
+
+class TestChainPayloads:
+    """The chain ships as one file per expiry, so the allowlist grew a pattern.
+
+    An allowlist is the right shape for a directory that gets uploaded to a
+    public URL - a new file is excluded until somebody says otherwise. Naming
+    thirty-odd expiry payloads in it would mean editing this file every time an
+    expiry rolls, which is how allowlists become ignore lists. The pattern is
+    the compromise, and it is only worth anything if it stays narrow.
+    """
+
+    def test_the_pattern_matches_what_the_packer_writes(self):
+        from jobs.deploy_space import PUBLISHED_PATTERN
+
+        for name in ("chart_NIFTY_20260908.js", "chart_BANKNIFTY_20270629.js"):
+            assert PUBLISHED_PATTERN.match(name), f"{name} would not be published"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            ".env",
+            "chart_index.js",
+            "notes.js",
+            "chart_nifty_20260908.js",
+            "chart_NIFTY_2026.js",
+            "chart_NIFTY_20260908.js.bak",
+            "secrets_NIFTY_20260908.js",
+        ],
+    )
+    def test_the_pattern_does_not_widen_into_an_ignore_list(self, name: str):
+        from jobs.deploy_space import PUBLISHED_PATTERN
+
+        assert not PUBLISHED_PATTERN.match(name), (
+            f"{name} would be uploaded to a public URL by a rule meant for " "expiry payloads"
+        )
+
+    def test_an_index_naming_a_file_that_is_not_there_stops_the_deploy(self, tmp_path, monkeypatch):
+        """The failure that is silent on both sides.
+
+        The page loads the index, draws the whole ladder from it, requests the
+        candles, and gets a 404. `onerror` rejects a promise on a path nobody
+        awaits, so the console shows one failed request and the pane simply
+        stays empty next to a ladder that looks complete.
+        """
+        import jobs.deploy_space as mod
+
+        (tmp_path / "chart_index.js").write_text(
+            'window.CHART_INDEX = {"expiries":[{"file": "chart_NIFTY_20260908.js"}]};',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(mod, "SPACE_DIR", tmp_path)
+        assert mod.index_is_covered() == ["chart_NIFTY_20260908.js"]
+
+        (tmp_path / "chart_NIFTY_20260908.js").write_text("window.X = 1;", encoding="utf-8")
+        assert mod.index_is_covered() == []
+
+    def test_the_payloads_are_gathered_from_disk_not_from_the_index(self, tmp_path, monkeypatch):
+        """Deriving the file list from the index would make the check above vacuous."""
+        import jobs.deploy_space as mod
+
+        (tmp_path / "chart_NIFTY_20260908.js").write_text("window.X = 1;", encoding="utf-8")
+        (tmp_path / "chart_index.js").write_text("window.CHART_INDEX = {};", encoding="utf-8")
+        monkeypatch.setattr(mod, "SPACE_DIR", tmp_path)
+        assert [f.name for f in mod.payloads()] == ["chart_NIFTY_20260908.js"]

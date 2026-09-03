@@ -26,6 +26,7 @@ whole difference between a convenient config and a leak waiting for one careless
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,12 +42,19 @@ PUBLISHED = (
     "desk.html",
     "chart.html",
     "chart_index.js",
-    "chart_NIFTY.js",
-    "chart_BANKNIFTY.js",
     "app.css",
     "app.js",
     "data.js",
 )
+
+# The one exception to the allowlist, and it is a narrow one. The chain payload
+# is split per expiry now - NIFTY alone lists eighteen - so the names are not
+# knowable in advance and listing them here would mean editing this file every
+# time an expiry rolls. The pattern is anchored and specific: an underlying in
+# capitals, a date, nothing else. It matches what jobs/chart_history.py writes
+# and would not match a stray file somebody dropped in the directory, which is
+# the property the allowlist exists for.
+PUBLISHED_PATTERN = re.compile(r"^chart_[A-Z][A-Z0-9]*_\d{8}\.js$")
 
 # `live.html` is deliberately absent. It polls `/api/live`, which is served by
 # the local dashboard process reading the recorder's own partitions - a static
@@ -68,8 +76,6 @@ def missing_dependencies() -> list[str]:
     Only relative references count. A font on a CDN is not this script's
     business, and treating it as one would make the check noisy enough to skip.
     """
-    import re
-
     wanted: list[str] = []
     for name in PUBLISHED:
         page = SPACE_DIR / name
@@ -80,9 +86,41 @@ def missing_dependencies() -> list[str]:
             if ref.startswith(("http://", "https://", "//", "#", "data:", "mailto:")):
                 continue
             target = ref.split("?")[0].split("#")[0].strip()
-            if target and target not in ("./", "/") and target not in PUBLISHED:
-                wanted.append(f"{name} -> {target}")
+            if target in ("./", "/") or not target:
+                continue
+            if target in PUBLISHED or PUBLISHED_PATTERN.match(target):
+                continue
+            wanted.append(f"{name} -> {target}")
     return sorted(set(wanted))
+
+
+def payloads() -> list[Path]:
+    """The per-expiry chain files, in the order the index lists them.
+
+    Sorted so a diff of two deploys is readable, and gathered by pattern rather
+    than by reading the index: an index that names a file which is not there is
+    a page that waits forever for a global, and the check below is what catches
+    that - it cannot catch it if the file list is derived from the same index.
+    """
+    return sorted(
+        (f for f in SPACE_DIR.iterdir() if f.is_file() and PUBLISHED_PATTERN.match(f.name)),
+        key=lambda f: f.name,
+    )
+
+
+def index_is_covered() -> list[str]:
+    """Every file the index tells the page to load must be one this deploy sends.
+
+    The failure this prevents is silent on both sides: the page requests a
+    script that 404s, `onerror` fires into a promise nobody is awaiting on the
+    happy path, and the pane stays empty with the ladder still drawn beside it.
+    """
+    index = SPACE_DIR / "chart_index.js"
+    if not index.is_file():
+        return []
+    text = index.read_text(encoding="utf-8", errors="ignore")
+    here = {f.name for f in payloads()} | set(PUBLISHED)
+    return sorted({m for m in re.findall(r'"file":\s*"([^"]+)"', text) if m not in here})
 
 
 def _token_from_env() -> str | None:
@@ -127,7 +165,16 @@ def files() -> list[Path]:
     missing = [n for n in PUBLISHED if not (SPACE_DIR / n).is_file()]
     if missing:
         raise SystemExit(f"  missing from {SPACE_DIR.name}/: {', '.join(missing)}")
-    return [SPACE_DIR / n for n in PUBLISHED]
+    orphans = index_is_covered()
+    if orphans:
+        raise SystemExit(
+            f"  chart_index.js names {len(orphans)} payload(s) that are not in "
+            f"{SPACE_DIR.name}/: {', '.join(orphans[:4])}"
+            + ("..." if len(orphans) > 4 else "")
+            + "\n  The page would load the index, draw the ladder, and wait "
+            "forever for candles that 404. Re-run jobs/chart_history.py."
+        )
+    return [SPACE_DIR / n for n in PUBLISHED] + payloads()
 
 
 def check() -> int:
@@ -136,8 +183,8 @@ def check() -> int:
     for f in files():
         size = f.stat().st_size
         total += size
-        print(f"    {f.name:<14}{size:>8,} bytes")
-    print(f"    {'total':<14}{total:>8,} bytes")
+        print(f"    {f.name:<28}{size:>10,} bytes")
+    print(f"    {'total':<28}{total:>10,} bytes")
 
     extra = sorted(p.name for p in SPACE_DIR.iterdir() if p.is_file() and p.name not in PUBLISHED)
     if extra:
