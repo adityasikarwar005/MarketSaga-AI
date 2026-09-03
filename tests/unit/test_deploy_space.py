@@ -9,6 +9,9 @@ the new front door up without its stylesheet. Nothing would have errored.
 
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
 from jobs.deploy_space import HELD_BACK, PUBLISHED, SPACE_DIR, missing_dependencies
@@ -168,10 +171,17 @@ class TestWhatIsActuallyUploaded:
             def upload_folder(self, **kw):
                 calls["upload"] = kw
 
-        import huggingface_hub
-
-        monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
-        monkeypatch.setattr(huggingface_hub, "whoami", lambda **kw: {"name": "someone"})
+        # The vendor package is stood up in sys.modules rather than imported.
+        # `huggingface_hub` lives in the `[deploy]` extra and CI installs
+        # `[dev,api,infra]`, so importing it here passed locally and failed on
+        # the runner - and skipping when it is absent would retire this guard in
+        # the only place that runs unattended. `deploy()` imports it inside the
+        # function, so a stand-in in sys.modules is all it ever sees.
+        monkeypatch.setitem(
+            sys.modules,
+            "huggingface_hub",
+            types.SimpleNamespace(HfApi=FakeApi, whoami=lambda **kw: {"name": "someone"}),
+        )
         import jobs.deploy_space as mod
 
         monkeypatch.setattr(mod, "_token_from_env", lambda: "tok")
