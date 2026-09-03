@@ -3341,3 +3341,34 @@ in `services/dashboard`, naming what moved. The first fence exists because one t
 appended to the real experiment log for several sessions and the only symptom was a
 modified file in `git status`. This one exists for the same reason, one directory
 over, and it was verified by making a test touch the directory and watching it fail.
+
+## The deploy printed one list and uploaded another
+
+The Space was published, reported success, and served a page that could not draw a
+single candle. Caught by listing the live Space afterwards rather than trusting the
+word "published" — which is the same check M91 taught, one shape of the page later.
+
+`check()` built its file list from `files()`, which honours the expiry-payload
+pattern. `upload_folder` was passed `allow_patterns=list(PUBLISHED)`, which does not.
+So the summary printed eighteen payloads and 6.9 MB going up, and nine files went.
+The upload then reported `published`, truthfully, about the nine.
+
+What that produced on the live page is the exact failure the local `index_is_covered`
+guard was written to prevent, arriving from the one direction that guard cannot see:
+the index was correct, the payloads it named were correct, and they were correct **on
+this machine**. Remotely they did not exist. The page would have loaded the index,
+drawn a complete 86-strike ladder, and 404'd every set of candles behind it.
+
+Two derivations of "what gets published" is the defect, and it was in this file twice
+in one afternoon — the summary line listing everything about to be uploaded under the
+heading *not published* was the same mistake, in the reporting rather than the
+upload. Both now come from `files()`. There is a test asserting the upload's patterns
+equal `[f.name for f in files()]` — not that the list is right, that the two are the
+same list, because being the same is what stops them drifting again.
+
+The upload also passes `delete_patterns=["chart_*.js"]` now. A remote payload nothing
+replaces is the same hazard as a stale one on disk and worse for being invisible from
+here: `chart_NIFTY.js` and `chart_data.js` were still on the Space from the previous
+shape of the page, valid scripts defining valid globals, sitting beside an index that
+no longer mentioned them. They are gone, and the check that says so — `missing: none,
+stale chart files: none` — is run against the live Space, not against the intent.

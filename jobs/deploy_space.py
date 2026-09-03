@@ -186,7 +186,14 @@ def check() -> int:
         print(f"    {f.name:<28}{size:>10,} bytes")
     print(f"    {'total':<28}{total:>10,} bytes")
 
-    extra = sorted(p.name for p in SPACE_DIR.iterdir() if p.is_file() and p.name not in PUBLISHED)
+    # Against what is actually going, not against the literal allowlist. Since
+    # the chain ships one payload per expiry the allowlist grew a pattern, and
+    # this line did not know about it - so it listed all eighteen files that were
+    # about to be uploaded under the heading "not published". A deploy summary
+    # that contradicts the deploy is worse than no summary: the whole reason to
+    # print one is to be read before saying yes.
+    going = {f.name for f in files()}
+    extra = sorted(p.name for p in SPACE_DIR.iterdir() if p.is_file() and p.name not in going)
     if extra:
         print(f"\n  not published (not on the allowlist): {', '.join(extra)}")
     for name, why in HELD_BACK.items():
@@ -253,11 +260,26 @@ def deploy(space: str, *, private: bool, yes: bool) -> int:
     api.create_repo(
         repo_id=space, repo_type="space", space_sdk="static", private=private, exist_ok=True
     )
+    # From `files()`, which is what `check()` printed. These were two lists: the
+    # summary came from `files()` and the upload from `PUBLISHED` alone, so once
+    # the chain started shipping one payload per expiry the check reported 6.9 MB
+    # of candles going up and the upload sent none of them. It said "published"
+    # and it was telling the truth about the nine files it had sent.
+    going = [f.name for f in files()]
     api.upload_folder(
         repo_id=space,
         repo_type="space",
         folder_path=str(SPACE_DIR),
-        allow_patterns=list(PUBLISHED),
+        allow_patterns=going,
+        # Remote payloads this deploy is not replacing are removed. They are the
+        # same hazard as a stale one on disk, and worse for being invisible from
+        # here: a file left from a previous shape of the page - yesterday's
+        # expiries, or the per-underlying files that preceded the split - is a
+        # valid script defining a valid global, and it sits next to an index that
+        # no longer mentions it until something loads it and dates it from its
+        # own contents. Scoped to the generated chart payloads, which are the
+        # only files here this job produces.
+        delete_patterns=["chart_*.js"],
         commit_message="MarketSage Desk - monitoring workspace",
     )
     print(f"\n  published: https://huggingface.co/spaces/{space}")

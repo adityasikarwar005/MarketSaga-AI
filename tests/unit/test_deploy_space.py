@@ -139,3 +139,83 @@ class TestChainPayloads:
         (tmp_path / "chart_index.js").write_text("window.CHART_INDEX = {};", encoding="utf-8")
         monkeypatch.setattr(mod, "SPACE_DIR", tmp_path)
         assert [f.name for f in mod.payloads()] == ["chart_NIFTY_20260908.js"]
+
+
+class TestWhatIsActuallyUploaded:
+    """The summary and the upload have to be the same list, by construction.
+
+    They were not. `check()` built its list from `files()`, which honours the
+    expiry-payload pattern; `upload_folder` was passed `PUBLISHED` alone, which
+    does not. So a deploy printed 6.9 MB of candles, uploaded nine files, and
+    reported "published" - truthfully, about the nine. The index went up naming
+    eighteen payloads that were never sent, and the live page would have drawn a
+    complete ladder over eighteen 404s.
+
+    A summary printed to be read before saying yes, that describes something
+    other than what happens after yes, is worse than no summary.
+    """
+
+    def _spy(self, monkeypatch):
+        calls = {}
+
+        class FakeApi:
+            def __init__(self, token=None):
+                pass
+
+            def create_repo(self, **kw):
+                calls["create"] = kw
+
+            def upload_folder(self, **kw):
+                calls["upload"] = kw
+
+        import huggingface_hub
+
+        monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
+        monkeypatch.setattr(huggingface_hub, "whoami", lambda **kw: {"name": "someone"})
+        import jobs.deploy_space as mod
+
+        monkeypatch.setattr(mod, "_token_from_env", lambda: "tok")
+        return calls
+
+    def test_the_upload_sends_exactly_what_the_check_listed(self, monkeypatch, capsys):
+        import jobs.deploy_space as mod
+
+        calls = self._spy(monkeypatch)
+        assert mod.deploy("someone/space", private=False, yes=True) == 0
+        capsys.readouterr()
+
+        assert calls["upload"]["allow_patterns"] == [
+            f.name for f in mod.files()
+        ], "the upload and the printed summary are two different lists again"
+
+    def test_the_expiry_payloads_are_in_it(self, monkeypatch, capsys):
+        """The concrete regression: they were not, and nothing said so."""
+        import jobs.deploy_space as mod
+
+        calls = self._spy(monkeypatch)
+        mod.deploy("someone/space", private=False, yes=True)
+        capsys.readouterr()
+
+        sent = calls["upload"]["allow_patterns"]
+        payloads = [n for n in sent if mod.PUBLISHED_PATTERN.match(n)]
+        assert payloads, (
+            "not one expiry payload was uploaded; the page would draw its ladder "
+            "from the index and 404 every set of candles behind it"
+        )
+        assert "chart_index.js" in sent
+
+    def test_superseded_payloads_are_removed_from_the_Space(self, monkeypatch, capsys):
+        """A leftover remote payload is the same hazard as a leftover local one.
+
+        Worse, in fact: it is invisible from here. A file from a previous shape
+        of the page - yesterday's expiries, or the per-underlying files that
+        preceded the split - is a valid script defining a valid global, sitting
+        next to an index that no longer names it.
+        """
+        import jobs.deploy_space as mod
+
+        calls = self._spy(monkeypatch)
+        mod.deploy("someone/space", private=False, yes=True)
+        capsys.readouterr()
+
+        assert calls["upload"].get("delete_patterns") == ["chart_*.js"]
