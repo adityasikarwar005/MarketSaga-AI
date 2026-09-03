@@ -16,6 +16,8 @@ refused in the log rather than discovered in the page.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -24,10 +26,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from jobs import close_out
+from jobs.close_out import only_one
 from libs.ms_core import dotenv
 
 IST = ZoneInfo("Asia/Kolkata")
 DAY = date(2026, 9, 2)
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
@@ -219,3 +223,78 @@ def test_being_late_is_not_a_failure(monkeypatch, wired):
     log = _log(wired)
     assert "still open" not in log
     assert (datetime.now(IST) - timedelta(days=1)).date() <= DAY
+
+
+class TestOnlyOne:
+    """Two close-outs must not sweep the same day into the same cache.
+
+    On 2026-09-03 the scheduled task started at 15:53 and again at 15:59, and a
+    third was started by hand. Three processes then made the same 2450 requests
+    against an endpoint that rate limits, into one cache directory, writing one
+    manifest.json between them. Nothing errored. They simply raced, took four
+    hours over what one of them would have taken four hours over, and whichever
+    finished last decided what the day's manifest said.
+    """
+
+    def _holder(self, lock_path: Path) -> str:
+        return (
+            "import sys, time;"
+            f"sys.path.insert(0, {str(ROOT)!r});"
+            "from pathlib import Path;"
+            "from jobs.close_out import only_one;"
+            f"lock = only_one(Path({str(lock_path)!r}));"
+            "lock.__enter__();"
+            "print('held', flush=True);"
+            "time.sleep(30)"
+        )
+
+    def test_a_second_one_is_refused_while_the_first_runs(self, tmp_path):
+        """Two real processes, because a lock that only holds within one is not a lock."""
+        lock_path = tmp_path / "closeout.lock"
+        proc = subprocess.Popen(
+            [sys.executable, "-c", self._holder(lock_path)],
+            stdout=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        try:
+            assert proc.stdout is not None
+            assert proc.stdout.readline().strip() == "held", "the helper never took the lock"
+            with pytest.raises(close_out.AlreadyRunning), only_one(lock_path):
+                pass
+        finally:
+            proc.kill()
+            proc.wait(timeout=10)
+
+    def test_the_lock_dies_with_the_process_that_held_it(self, tmp_path):
+        """Why this is an OS lock and not a pid file.
+
+        A four-hour job gets killed sometimes - a reboot, a laptop lid, a
+        Ctrl-C. A lock file left on disk then refuses tomorrow's run for a
+        reason that stopped being true, and somebody has to know to delete it.
+        The kernel releases this one however the process ends, including when it
+        is killed outright, which is what this asserts.
+        """
+        lock_path = tmp_path / "closeout.lock"
+        proc = subprocess.Popen(
+            [sys.executable, "-c", self._holder(lock_path)],
+            stdout=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        assert proc.stdout is not None
+        assert proc.stdout.readline().strip() == "held"
+        proc.kill()
+        proc.wait(timeout=10)
+
+        assert lock_path.exists(), "the file remains; it is the lock on it that is gone"
+        with only_one(lock_path):
+            pass  # no AlreadyRunning
+
+    def test_a_dry_run_does_not_need_the_lock(self, monkeypatch, wired):
+        """Saying what it would do is not doing it, and must work while one runs."""
+        lock_path = wired / "closeout.lock"
+        monkeypatch.setattr(close_out, "LOCK_FILE", lock_path)
+        with only_one(lock_path):
+            assert close_out.main(["--date", DAY.isoformat(), "--dry-run"]) == 0
+        assert "would close out" in _log(wired)

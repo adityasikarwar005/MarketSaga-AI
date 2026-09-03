@@ -721,20 +721,26 @@ class TestCallDeadline:
 
 
 class TestCacheFreshness:
-    """The cache is unconditional for a finished day and must not be for a live one.
+    """The cache is unconditional for a *finished* read and must not be for a partial one.
 
     Everything cached is skipped on a re-run, which is what makes an interrupted
-    sweep resumable. Applied to a session still being written, it would freeze
-    the whole board at whatever minute the first run happened to reach each
-    contract - and a board frozen at 10:47 looks exactly like a market that
-    stopped trading at 10:47.
+    sweep of 2450 contracts resumable. The question that decides whether skipping
+    is safe is not "is the session over now" but **"was the session over when
+    this file was written"**, and those two look like the same question.
+
+    Reading it the first way costs a day. A sweep taken during trading hours
+    writes six hundred partial files; at 15:30 every one of them becomes "a
+    finished day" and is never asked for again, so the board keeps the three
+    hours it happened to catch, permanently, and looks like a market that went
+    quiet at 11:32.
     """
 
-    def _file(self, tmp_path: Path, age_seconds: float, now: datetime) -> Path:
+    CLOSE = datetime(2026, 9, 3, 15, 30, tzinfo=IST)
+
+    def _file(self, tmp_path: Path, written: datetime) -> Path:
         path = tmp_path / "42.ndjson"
         path.write_text("", encoding="utf-8")
-        stamp = now.timestamp() - age_seconds
-        os.utime(path, (stamp, stamp))
+        os.utime(path, (written.timestamp(), written.timestamp()))
         return path
 
     def _clock(self, when: datetime):
@@ -744,38 +750,42 @@ class TestCacheFreshness:
 
         return Fixed()
 
-    def test_a_finished_day_is_never_re_asked_for(self, tmp_path: Path) -> None:
-        now = datetime(2026, 9, 3, 11, 0, tzinfo=IST)
-        path = self._file(tmp_path, 86400.0, now)
-        assert (
-            option_history._stale(path, date(2026, 9, 2), self._clock(now), max_age=300.0) is False
-        )
+    def _stale(self, path: Path, day: date, now: datetime) -> bool:
+        return option_history._stale(path, day, self._clock(now), max_age=300.0)
 
-    def test_a_live_session_goes_stale(self, tmp_path: Path) -> None:
-        now = datetime(2026, 9, 3, 11, 0, tzinfo=IST)
-        path = self._file(tmp_path, 600.0, now)
-        assert (
-            option_history._stale(path, date(2026, 9, 3), self._clock(now), max_age=300.0) is True
-        )
+    def test_a_series_read_after_its_own_close_is_final(self, tmp_path: Path) -> None:
+        """The ordinary case, and the one the cache exists for."""
+        path = self._file(tmp_path, datetime(2026, 9, 2, 19, 0, tzinfo=IST))
+        assert self._stale(path, date(2026, 9, 2), datetime(2026, 9, 3, 11, 0, tzinfo=IST)) is False
 
     def test_a_recent_read_of_a_live_session_is_kept(self, tmp_path: Path) -> None:
         now = datetime(2026, 9, 3, 11, 0, tzinfo=IST)
-        path = self._file(tmp_path, 60.0, now)
-        assert (
-            option_history._stale(path, date(2026, 9, 3), self._clock(now), max_age=300.0) is False
-        )
+        path = self._file(tmp_path, now - timedelta(seconds=60))
+        assert self._stale(path, date(2026, 9, 3), now) is False
 
-    def test_today_stops_being_live_at_the_close(self, tmp_path: Path) -> None:
-        """After 15:30 today's bars are as final as yesterday's.
+    def test_a_stale_read_of_a_live_session_is_re_asked_for(self, tmp_path: Path) -> None:
+        now = datetime(2026, 9, 3, 11, 0, tzinfo=IST)
+        path = self._file(tmp_path, now - timedelta(seconds=600))
+        assert self._stale(path, date(2026, 9, 3), now) is True
 
-        Without this a sweep run in the evening would re-fetch all 2450
-        contracts it already had, for bars that cannot have changed.
+    def test_a_partial_read_is_re_asked_for_once_the_session_has_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """The clause that keeps a day from staying half-read for good.
+
+        This file holds 09:15 to 11:32 because that is when the sweep reached
+        that contract. The day it describes now has six and a quarter hours in
+        it. Treating it as final because *the session is over* keeps the two
+        hours and discards the rest, which is precisely backwards - the session
+        being over is what makes the rest of it available.
         """
-        now = datetime(2026, 9, 3, 16, 0, tzinfo=IST)
-        path = self._file(tmp_path, 3600.0, now)
-        assert (
-            option_history._stale(path, date(2026, 9, 3), self._clock(now), max_age=300.0) is False
-        )
+        path = self._file(tmp_path, datetime(2026, 9, 3, 11, 32, tzinfo=IST))
+        assert self._stale(path, date(2026, 9, 3), datetime(2026, 9, 3, 16, 20, tzinfo=IST)) is True
+
+    def test_a_partial_read_of_an_older_day_is_still_partial(self, tmp_path: Path) -> None:
+        """And does not become whole by getting older."""
+        path = self._file(tmp_path, datetime(2026, 9, 2, 11, 0, tzinfo=IST))
+        assert self._stale(path, date(2026, 9, 2), datetime(2026, 9, 3, 11, 0, tzinfo=IST)) is True
 
     def test_the_age_is_the_file_s_not_the_last_bar_s(self, tmp_path: Path) -> None:
         """Why the check is on mtime rather than on the series it holds.
@@ -787,11 +797,18 @@ class TestCacheFreshness:
         contract that happened to be read early exactly as stale as it was.
         """
         now = datetime(2026, 9, 3, 11, 0, tzinfo=IST)
-        fresh = self._file(tmp_path, 10.0, now)
-        assert fresh.read_text(encoding="utf-8") == ""  # no bars at all
-        assert (
-            option_history._stale(fresh, date(2026, 9, 3), self._clock(now), max_age=300.0) is False
-        )
+        path = self._file(tmp_path, now - timedelta(seconds=10))
+        assert path.read_text(encoding="utf-8") == ""  # no bars at all
+        assert self._stale(path, date(2026, 9, 3), now) is False
+
+    def test_no_clock_means_no_re_asking(self, tmp_path: Path) -> None:
+        """A caller with no clock gets the old unconditional cache, deliberately.
+
+        Several jobs rebuild a page from what is already on disk and must not
+        start making network calls because a file looks old.
+        """
+        path = self._file(tmp_path, datetime(2026, 9, 3, 11, 0, tzinfo=IST))
+        assert option_history._stale(path, date(2026, 9, 3), None, max_age=300.0) is False
 
 
 class TestProjectionAnchor:

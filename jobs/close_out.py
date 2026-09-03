@@ -38,9 +38,14 @@ decision and a separate command.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +73,69 @@ UNDERLYINGS = ("NIFTY", "BANKNIFTY")
 # not ragged the way a sweep taken during trading hours necessarily is.
 STRIKES_EACH_SIDE: int | None = None
 EXPIRIES: int | None = None
+
+
+LOCK_FILE = ROOT / "build" / "closeout.lock"
+
+
+class AlreadyRunning(RuntimeError):
+    """Another close-out holds the lock."""
+
+
+@contextmanager
+def only_one(path: Path = LOCK_FILE) -> Iterator[None]:
+    """Refuse to start while another close-out is running.
+
+    This happened. On 2026-09-03 the scheduled task started at 15:53 and again
+    at 15:59, and a third by hand, so three processes were sweeping the same
+    2450 contracts into the same cache directory and writing the same
+    manifest.json. Nothing errored - they raced, duplicated four hours of
+    requests against an endpoint that rate limits, and whichever finished last
+    decided what the day's manifest said.
+
+    The lock is an OS file lock held for the process's lifetime rather than a
+    pid file, because the failure mode of a pid file is the one that matters
+    here: a job this long *will* be killed sometimes, and a stale lock that
+    outlives it means tomorrow's run refuses for a reason that no longer exists.
+    An OS lock is released by the kernel when the process ends, however it ends.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A raw descriptor, and the pid written *past* the locked byte. Windows will
+    # not let a handle be truncated or closed cleanly across a region it holds a
+    # lock on - the first version locked byte 0, rewound, truncated, and then
+    # raised PermissionError from `close()`, which reads as a permissions problem
+    # and is a locking one. So byte 0 is the lock and nothing else, and the pid -
+    # which is only ever for a human wondering who holds this - lives after it.
+    fd = os.open(path, os.O_RDWR | os.O_CREAT)
+    try:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise AlreadyRunning(
+                f"another close-out already holds {path.name}. A full sweep is "
+                "2450 requests against an endpoint that rate limits, and two of "
+                "them race on the same cache and the same manifest. If this is "
+                "wrong, the previous run's process is still alive - the lock is "
+                "released by the operating system, not by a file left behind."
+            ) from exc
+        os.lseek(fd, 1, os.SEEK_SET)
+        os.write(fd, f" pid {os.getpid()}\n".encode())
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            if sys.platform == "win32":
+                import msvcrt
+
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        os.close(fd)
 
 
 def _say(message: str, log: Path | None = None) -> None:
@@ -151,6 +219,21 @@ def main(argv: list[str] | None = None, *, clock: Clock | None = None) -> int:
         _say(f"dry run - would close out {today} for {', '.join(args.underlying)}.", log)
         return 0
 
+    try:
+        lock = only_one()
+        lock.__enter__()
+    except AlreadyRunning as exc:
+        _say(f"REFUSING: {exc}", log)
+        return 3
+
+    try:
+        return _run(args, today, log, clock)
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def _run(args: Any, today: date, log: Path, clock: Clock) -> int:
+    """The sweep itself, once the day and the lock are settled."""
     master = load_scrip_master(clock, refresh=False)
     creds = AngelCredentials.from_env()
     session = login(creds, clock)

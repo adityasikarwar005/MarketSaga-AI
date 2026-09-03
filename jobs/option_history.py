@@ -213,19 +213,38 @@ def forward_for(futures: list[ScripRow], expiry: date) -> tuple[ScripRow, str]:
 def _stale(path: Path, day: date, clock: Clock | None, *, max_age: float) -> bool:
     """Whether a cached series has to be asked for again.
 
-    Only ever true for a session that is still running. A finished day's bars are
-    finished; re-asking for them is how a cache turns into a rate limit. Today's
-    are not, and the check is on the **file's age** rather than on the last bar
-    in it, because a contract that has not traded since 09:20 and a contract
-    whose file was written at 09:20 look identical from the bars alone - and one
-    of them is a stale file while the other is a quiet strike.
+    The question is not "is the session over now" - it is **"was the session over
+    when this file was written"**. Those look like the same question and are not,
+    and getting them confused leaves a day permanently half-read.
+
+    A file written after its own session's close holds every bar that session
+    will ever have. Nothing can change it and re-asking for it is how a cache
+    turns into a rate limit, so it is never stale - whatever day it is for, and
+    whenever it is read.
+
+    A file written *during* the session it describes is a partial day by
+    construction. While that session is still running it goes stale on age, so a
+    sweep taken at 11:00 does not freeze the whole board at 11:00. Once the
+    session has closed it is stale unconditionally: the day it holds three hours
+    of is now a day with six and a quarter, and a post-close sweep exists exactly
+    to replace it. Without that clause a board swept during trading hours stays
+    ragged for good, because every one of its files became "a finished day" the
+    moment the bell rang.
+
+    The age is the **file's**, not the last bar's. A contract that has not traded
+    since 09:20 and a file last written at 09:20 hold identical bars; one is a
+    stale read and the other is a quiet strike, and nothing in the series tells
+    them apart.
     """
     if clock is None:
         return False
     now = clock.now().astimezone(IST)
     _, close = _day_bounds(day)
-    if now >= close:
+    written = datetime.fromtimestamp(path.stat().st_mtime, tz=IST)
+    if written >= close:
         return False
+    if now >= close:
+        return True
     return (now.timestamp() - path.stat().st_mtime) > max_age
 
 
