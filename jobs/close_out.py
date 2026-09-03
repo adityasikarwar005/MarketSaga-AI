@@ -268,11 +268,9 @@ def _run(args: Any, today: date, log: Path, clock: Clock) -> int:
     boards = {
         name: chart_history.build(today, name, option_history.HISTORY_ROOT) for name in fetched
     }
-    # Yesterday's expiries are not today's, and a leftover payload is a valid
-    # file defining a valid global that the page would load and date from its
-    # own contents.
-    for old in chart_history.OUT_DIR.glob("chart_*_*.js"):
-        old.unlink()
+    # Clearing superseded payloads is `write`'s job, not this one's. It was
+    # here, and these tests stub `write` - so the suite deleted the real
+    # dashboard's files on every run.
     written = chart_history.write(boards, today, chart_history.OUT_DIR)
     for name, group in boards.items():
         bars = sum(len(s["recorded"]) for b in group for s in b["series"])

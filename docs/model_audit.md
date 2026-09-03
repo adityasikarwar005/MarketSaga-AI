@@ -3307,3 +3307,37 @@ quarter, and the session ending is precisely what makes the rest available.
 
 Two things that look like the same question, one letter of difference in the code, and
 the wrong one leaves every intraday sweep permanently half-read.
+
+## The test suite was deleting the published page, and passing
+
+Found by a deploy check refusing to upload — the new one, which compares the files
+`chart_index.js` names against the files actually present. It named ten payloads and
+none of them were there.
+
+`close_out.main` cleared superseded chart payloads out of the real output directory
+and then called `chart_history.write`. Its tests stub `write` — correctly; they are
+about which underlyings get built when one fails — and **stubbing `write` does not
+stub the `unlink` loop standing next to it**. So every run of the suite deleted the
+day's candles from `services/dashboard`, which is the directory that gets uploaded to
+a public Space.
+
+Nothing failed. The tests passed. The page kept its ladder, because the index is a
+separate file that was not deleted, and lost every candle behind it — which on the
+page is a complete-looking chain of strikes with an empty pane next to it and one
+404 in a console nobody has open. It is the same silent shape as everything else in
+this session's entry, arriving from a direction nobody was watching: not the market,
+not the vendor, the test suite.
+
+Two fixes, and the second is the general one.
+
+The deletion moved **inside `write`**. Clearing what a write supersedes is part of
+writing, not something a caller does beforehand, and a destructive step placed one
+call away from the thing that stubs it is a step in the wrong place. `close_out` and
+`chart_history.main` both had a copy of that loop; now neither does.
+
+And `tests/conftest.py` grew a second fence, next to the one guarding
+`research/experiments.jsonl`. It fails any test that adds, changes or removes a file
+in `services/dashboard`, naming what moved. The first fence exists because one test
+appended to the real experiment log for several sessions and the only symptom was a
+modified file in `git status`. This one exists for the same reason, one directory
+over, and it was verified by making a test touch the directory and watching it fail.

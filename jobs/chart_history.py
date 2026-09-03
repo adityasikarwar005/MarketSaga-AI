@@ -608,6 +608,24 @@ def write(boards: dict[str, list[dict[str, Any]]], day: date, out_dir: Path) -> 
     rail render before any payload arrives, and a payload is fetched only when
     its expiry is opened.
     """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Clearing what this is about to supersede is part of writing, and it lives
+    # here rather than in each caller for a reason that cost a working page.
+    # `close_out` did it before calling `write`, and its tests stub `write` and
+    # not the loop beside it - so running the test suite deleted the real
+    # dashboard's payloads, silently, and nothing noticed until a deploy check
+    # refused. A destructive step that a caller can stub out from under is a
+    # step in the wrong place.
+    #
+    # Yesterday's expiries are not today's, and a leftover payload is a valid
+    # file defining a valid global: the page would load it happily and date it
+    # from its own contents, which is how a chart of a contract that has since
+    # expired ends up on a page headed today.
+    keep = {f"chart_{name}_{_slug(b['expiry'])}.js" for name, g in boards.items() for b in g}
+    for stale in out_dir.glob("chart_*_*.js"):
+        if stale.name not in keep:
+            stale.unlink()
+
     written: list[Path] = []
     for name, group in boards.items():
         for b in group:
@@ -671,14 +689,6 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    # Yesterday's expiries are not today's. A file left behind from a previous
-    # day is still a valid payload with a valid global, and the page would load
-    # it happily and date it from its own contents - which is how a chart of a
-    # contract that has since expired ends up on a page headed today.
-    for stale in out.glob("chart_*_*.js"):
-        stale.unlink()
-
     boards = {name: build(args.date, name, Path(args.root)) for name in args.underlying}
     written = write(boards, args.date, out)
 

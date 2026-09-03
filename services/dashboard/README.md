@@ -53,7 +53,7 @@ use to decide anything.
 - **PAPER indicator** — structural rather than a badge. No order in this system
   has ever reached a broker.
 
-## Two pages
+## Three pages
 
 `index.html` is the overview: what the system is, the five models measured on
 real data, the gate ledger with G4 and G7 failing, and the machinery that makes
@@ -62,6 +62,34 @@ instrument panel with no context tells a first-time reader nothing.
 
 `desk.html` is the workspace itself. It is deliberately dense and stays that
 way; the front page is what carries the air and the explanation.
+
+`chart.html` is the chain, and it is the one page here built on **real market
+data throughout**. Every call and every put listed on NIFTY and BankNifty - every
+strike, every live expiry, weeklies out to the far-dated contracts nobody trades
+- with real one-minute candles from the exchange's own history for each one.
+
+It is read the way an Indian chain is read: calls left, strikes down the centre,
+puts right, expiries on a rail above. Picking a rung opens its call and its put
+together, because a strike is one position seen from two directions and they move
+against each other.
+
+Two things on it are drawn to be impossible to confuse with the candles. The
+**forecast** is violet - a colour no traded price uses - hollow, and a bar a
+minute for the next hour; it is not a price that happened and it is not a range
+anything traded in, it is the 10th to 90th percentile of a distribution. Its only
+mechanism is time decay: each contract's implied volatility is inverted from its
+own price against the future's price from the same minute, and the forward is
+then diffused with no drift, because nothing in this repository has earned a view
+on direction. What that is worth is measured on the same day it is drawn on,
+per expiry, against the only baseline that matters - "it will be what it is now" -
+and whatever the comparison says is printed under the chart, including the days
+it loses.
+
+And **an expiry with no future behind it gets no forecast at all**. NIFTY lists
+options to 2031 and futures three months out, so most expiries have nothing to
+price against; extending the last future out three years would be assumed
+dividends dressed as a traded price. Those keep their ladder and their real
+candles and are marked on the rail.
 
 ## Running it locally
 
